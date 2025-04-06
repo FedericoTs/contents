@@ -63,6 +63,10 @@ export const saveContentItem = async ({
   previewUrl = null,
   targetType = null,
   user_id = null,
+  content = null,
+  description = null,
+  author = null,
+  publishDate = null,
 }: {
   title: string;
   contentType: string;
@@ -71,6 +75,10 @@ export const saveContentItem = async ({
   previewUrl?: string | null;
   targetType?: string | null;
   user_id?: string | null;
+  content?: string | null;
+  description?: string | null;
+  author?: string | null;
+  publishDate?: string | null;
 }) => {
   try {
     // Get current user if not provided
@@ -91,6 +99,10 @@ export const saveContentItem = async ({
         target_type: targetType,
         status: "pending",
         user_id: userId,
+        content: content,
+        description: description,
+        author: author,
+        published_at: publishDate,
       })
       .select()
       .single();

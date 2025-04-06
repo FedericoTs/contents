@@ -30,9 +30,11 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { useToast } from "@/components/ui/use-toast";
 
 const Home = () => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [processingResult, setProcessingResult] = useState<any>(null);
   const [contentItems, setContentItems] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -42,8 +44,35 @@ const Home = () => {
 
   const handleAddToQueue = async (transformationConfig: any) => {
     try {
-      // In a real app, you would get the content ID from the selected content
-      const contentId = "sample-content-id";
+      // Use the content ID from the transformation config or from selected content
+      const contentId = transformationConfig.contentId || selectedContent?.id;
+
+      // If no content ID is available, show an error
+      if (!contentId) {
+        console.log("No content ID available for processing");
+        toast({
+          title: "Error",
+          description:
+            "Please select or upload content first before transforming.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      console.log("Processing with content ID:", contentId);
+      console.log(
+        "Selected content:",
+        selectedContent
+          ? {
+              id: selectedContent.id,
+              title: selectedContent.title,
+              content_type: selectedContent.content_type,
+              content_preview: selectedContent.content
+                ? selectedContent.content.substring(0, 100) + "..."
+                : "No content",
+            }
+          : "None",
+      );
 
       // Create a processing job
       await createProcessingJob(contentId, {
@@ -55,8 +84,22 @@ const Home = () => {
         platforms: transformationConfig.settings.platforms,
         customInstructions: transformationConfig.sampleOutput,
       });
+
+      // Show success message
+      toast({
+        title: "Transformation added to queue",
+        description: `Your ${transformationConfig.sourceType} will be transformed to ${transformationConfig.targetFormat}.`,
+      });
     } catch (error) {
       console.error("Error creating processing job:", error);
+      toast({
+        title: "Error",
+        description:
+          typeof error === "object" && error.message
+            ? error.message
+            : "Failed to add transformation to queue. Please try again.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -318,6 +361,7 @@ const Home = () => {
                 contentType={selectedContent.content_type}
                 contentTitle={selectedContent.title}
                 targetType={selectedContent.target_type}
+                contentText={selectedContent.content}
               />
             ) : (
               <TransformationDashboard onAddToQueue={handleAddToQueue} />

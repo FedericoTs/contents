@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import { supabase } from "@/services/supabase";
 import { Session, User } from "@supabase/supabase-js";
 
@@ -25,8 +25,8 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Separate the provider implementation from the export
-function AuthProviderComponent({ children }: { children: React.ReactNode }) {
+// Use arrow function for the provider implementation for better Fast Refresh compatibility
+const AuthProviderComponent = ({ children }: { children: React.ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -108,16 +108,16 @@ function AuthProviderComponent({ children }: { children: React.ReactNode }) {
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
+};
 
 // Export the provider as a named export
-export const AuthProvider = AuthProviderComponent;
+export const AuthProvider = React.memo(AuthProviderComponent);
 
-// Export the hook as a named export with a function declaration for Fast Refresh compatibility
-export function useAuth() {
+// Export the hook as a named export with an arrow function for Fast Refresh compatibility
+export const useAuth = () => {
   const context = useContext(AuthContext);
   if (context === undefined) {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
-}
+};

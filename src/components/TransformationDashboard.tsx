@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { supabase } from "@/services/supabase";
 import {
   Card,
@@ -35,6 +35,9 @@ import {
   Linkedin,
   Youtube,
   Facebook,
+  Mic,
+  Video,
+  Loader2,
 } from "lucide-react";
 
 interface TransformationDashboardProps {
@@ -52,12 +55,60 @@ interface TransformationConfig {
   method: "manual" | "ai";
   targetType?: "audio" | "video" | null;
   sampleOutput?: string;
+  jobId?: string;
+  contentId?: string;
   settings: {
     tone?: string;
     length?: number;
     platforms?: string[];
     preserveKeyPoints?: boolean;
   };
+}
+
+interface ContentItem {
+  id: string;
+  title: string;
+  content_type: string;
+  content: string | null;
+  created_at: string;
+}
+
+// Helper function to fetch content from database
+async function fetchContentFromDatabase(contentId: string): Promise<string> {
+  try {
+    console.log(
+      "[TransformationDashboard] Fetching content from database for ID:",
+      contentId,
+    );
+    const { data, error } = await supabase
+      .from("content_items")
+      .select("content")
+      .eq("id", contentId)
+      .single();
+
+    if (error) {
+      console.error("[TransformationDashboard] Error fetching content:", error);
+      return "This is a sample article about content repurposing. Content repurposing is the practice of taking existing content and transforming it into new formats to reach different audiences or serve different purposes.";
+    }
+
+    if (!data || !data.content) {
+      console.warn(
+        "[TransformationDashboard] No content found in database, using sample",
+      );
+      return "This is a sample article about content repurposing. Content repurposing is the practice of taking existing content and transforming it into new formats to reach different audiences or serve different purposes.";
+    }
+
+    console.log(
+      "[TransformationDashboard] Successfully fetched content from database",
+    );
+    return data.content;
+  } catch (error) {
+    console.error(
+      "[TransformationDashboard] Error in fetchContentFromDatabase:",
+      error,
+    );
+    return "This is a sample article about content repurposing. Content repurposing is the practice of taking existing content and transforming it into new formats to reach different audiences or serve different purposes.";
+  }
 }
 
 const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
@@ -83,12 +134,116 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
     "twitter",
   ]);
 
+  // New state for content selection
+  const [availableContent, setAvailableContent] = useState<ContentItem[]>([]);
+  const [selectedContentId, setSelectedContentId] = useState<
+    string | undefined
+  >(contentId);
+  const [isLoadingContent, setIsLoadingContent] = useState(false);
+  const [selectedContentTitle, setSelectedContentTitle] =
+    useState<string>(contentTitle);
+  const [selectedContentType, setSelectedContentType] =
+    useState<string>(contentType);
+
+  // Fetch available content from the database
+  const fetchAvailableContent = async () => {
+    setIsLoadingContent(true);
+    try {
+      const { data, error } = await supabase
+        .from("content_items")
+        .select("id, title, content_type, content, created_at")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      console.log(
+        "[TransformationDashboard] Fetched content items:",
+        data?.length || 0,
+      );
+      setAvailableContent(data || []);
+    } catch (error) {
+      console.error(
+        "[TransformationDashboard] Error fetching content items:",
+        error,
+      );
+    } finally {
+      setIsLoadingContent(false);
+    }
+  };
+
+  // Load content when selected content changes
+  useEffect(() => {
+    const loadSelectedContent = async () => {
+      if (!selectedContentId) return;
+
+      try {
+        const { data, error } = await supabase
+          .from("content_items")
+          .select("*")
+          .eq("id", selectedContentId)
+          .single();
+
+        if (error) throw error;
+        if (data) {
+          console.log(
+            "[TransformationDashboard] Loaded selected content:",
+            data.title,
+          );
+          setSelectedContentType(data.content_type || "article");
+          setSelectedContentTitle(data.title || "Untitled Content");
+
+          // Set appropriate target format based on content type
+          if (data.content_type === "article") {
+            setTargetFormat("social-posts");
+          } else if (data.content_type === "video") {
+            setTargetFormat("blog-article");
+          } else if (data.content_type === "podcast") {
+            setTargetFormat("blog-article");
+          }
+        }
+      } catch (error) {
+        console.error(
+          "[TransformationDashboard] Error loading selected content:",
+          error,
+        );
+      }
+    };
+
+    loadSelectedContent();
+  }, [selectedContentId]);
+
+  // Initial setup
+  useEffect(() => {
+    // Set default values based on content type
+    if (contentType === "article") {
+      setTargetFormat("social-posts");
+    } else if (contentType === "video") {
+      setTargetFormat("blog-article");
+    } else if (contentType === "podcast") {
+      setTargetFormat("blog-article");
+    }
+
+    // Set selected content ID if provided
+    if (contentId) {
+      setSelectedContentId(contentId);
+    }
+
+    // Fetch available content
+    fetchAvailableContent();
+  }, [contentType, contentId]);
+
   const handleAddToQueue = async () => {
     setIsProcessing(true);
     setProcessingError(null);
+    console.log("[TransformationDashboard] Starting handleAddToQueue", {
+      contentType: selectedContentType || contentType,
+      contentTitle: selectedContentTitle || contentTitle,
+      targetFormat,
+      contentId: selectedContentId || contentId,
+      contentText: contentText ? `${contentText.substring(0, 50)}...` : null,
+    });
 
     const transformationConfig: TransformationConfig = {
-      sourceType: contentType,
+      sourceType: selectedContentType || contentType,
       targetFormat,
       method: transformMethod,
       targetType: targetType,
@@ -100,11 +255,15 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
         preserveKeyPoints,
       },
     };
+    console.log(
+      "[TransformationDashboard] Created transformationConfig:",
+      transformationConfig,
+    );
 
     try {
       // Create processing options
       const processingOptions = {
-        contentType,
+        contentType: selectedContentType || contentType,
         targetFormat,
         tone: contentTone,
         length: contentLength,
@@ -113,41 +272,83 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
         customInstructions:
           sampleOutput.trim() !== "" ? sampleOutput : undefined,
       };
+      console.log(
+        "[TransformationDashboard] Created processingOptions:",
+        processingOptions,
+      );
 
       // First, check if the content_id exists in content_items table
-      let actualContentId = contentId;
+      let actualContentId = selectedContentId || contentId;
+      console.log(
+        "[TransformationDashboard] Initial contentId:",
+        actualContentId,
+      );
 
       if (actualContentId) {
         // Verify the content_id exists
+        console.log(
+          "[TransformationDashboard] Verifying content_id exists in database",
+        );
         const { data: contentExists, error: contentCheckError } = await supabase
           .from("content_items")
           .select("id")
           .eq("id", actualContentId)
           .single();
 
+        console.log("[TransformationDashboard] Content verification result:", {
+          contentExists,
+          contentCheckError,
+        });
+
         if (contentCheckError || !contentExists) {
-          console.log("Content ID not found, creating a new content item");
+          console.log(
+            "[TransformationDashboard] Content ID not found, creating a new content item",
+          );
           actualContentId = null; // Reset to create a new one
         }
       }
 
       // If no valid content_id, create a new content item first
       if (!actualContentId) {
+        console.log(
+          "[TransformationDashboard] Creating new content item with title:",
+          selectedContentTitle || contentTitle,
+        );
+        // Create sample content if none is provided
+        const sampleContent =
+          contentText ||
+          "This is a sample article about content repurposing. Content repurposing is the practice of taking existing content and transforming it into new formats to reach different audiences or serve different purposes. It's an efficient way to maximize the value of your content creation efforts.";
+
         const { data: newContent, error: newContentError } = await supabase
           .from("content_items")
           .insert({
-            title: contentTitle,
-            content_type: contentType,
+            title: selectedContentTitle || contentTitle,
+            content_type: selectedContentType || contentType,
             status: "pending",
+            content: sampleContent,
           })
           .select()
           .single();
 
-        if (newContentError) throw newContentError;
+        if (newContentError) {
+          console.error(
+            "[TransformationDashboard] Error creating new content item:",
+            newContentError,
+          );
+          throw newContentError;
+        }
+        console.log(
+          "[TransformationDashboard] Created new content item:",
+          newContent,
+        );
         actualContentId = newContent.id;
       }
 
       // Create a processing job in the database
+      console.log(
+        "[TransformationDashboard] Creating processing job with content_id:",
+        actualContentId,
+      );
       const { data, error } = await supabase
         .from("processing_jobs")
         .insert({
@@ -159,73 +360,144 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error(
+          "[TransformationDashboard] Error creating processing job:",
+          error,
+        );
+        throw error;
+      }
+      console.log("[TransformationDashboard] Created processing job:", data);
 
-      // If we have content text, process it directly using OpenAI
-      if (contentText) {
-        try {
-          // Import the OpenAI service
-          const { processTextContent } = await import(
-            "../services/openaiService"
+      // Process content directly using OpenAI
+      // We'll process even if contentText is empty - we'll use sample content in that case
+      console.log(
+        "[TransformationDashboard] Processing content with OpenAI",
+        contentText ? "(user provided content)" : "(using sample content)",
+      );
+      try {
+        // Import the OpenAI service
+        const { processTextContent } = await import(
+          "../services/openaiService"
+        );
+
+        // Get the content to process - prioritize the uploaded content
+        let contentToProcess;
+        if (contentText) {
+          console.log(
+            "[TransformationDashboard] Using uploaded content for processing",
           );
-
-          // Process the content
-          const result = await processTextContent(
-            contentText,
-            processingOptions,
+          contentToProcess = contentText;
+        } else {
+          console.log(
+            "[TransformationDashboard] Fetching content from database",
           );
-
-          // Update the processing job with the result
-          await supabase
-            .from("processing_jobs")
-            .update({
-              status: "completed",
-              result,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", data.id);
-
-          // Set the processed content
-          setProcessedContent(result);
-
-          // Update the content item with the processed content
-          await supabase
-            .from("content_items")
-            .update({
-              processed_content: result,
-              status: "processed",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", actualContentId);
-        } catch (openaiError) {
-          console.error("Error processing with OpenAI:", openaiError);
-          setProcessingError(
-            openaiError.message || "Failed to process content with OpenAI",
-          );
-
-          // Update the processing job with the error
-          await supabase
-            .from("processing_jobs")
-            .update({
-              status: "failed",
-              error: openaiError.message,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", data.id);
+          contentToProcess = await fetchContentFromDatabase(actualContentId);
         }
+
+        // Process the content
+        console.log(
+          "[TransformationDashboard] Calling processTextContent with options:",
+          processingOptions,
+        );
+        const result = await processTextContent(
+          contentToProcess,
+          processingOptions,
+        );
+        console.log(
+          "[TransformationDashboard] Received result from OpenAI:",
+          result ? `${result.substring(0, 100)}...` : null,
+        );
+
+        // Update the processing job with the result
+        console.log(
+          "[TransformationDashboard] Updating processing job with result",
+        );
+        const { error: updateJobError } = await supabase
+          .from("processing_jobs")
+          .update({
+            status: "completed",
+            result,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", data.id);
+
+        if (updateJobError) {
+          console.error(
+            "[TransformationDashboard] Error updating processing job:",
+            updateJobError,
+          );
+        }
+
+        // Set the processed content
+        setProcessedContent(result);
+
+        // Update the content item with the processed content
+        console.log(
+          "[TransformationDashboard] Updating content item with processed content",
+        );
+        const { error: updateContentError } = await supabase
+          .from("content_items")
+          .update({
+            processed_content: result,
+            status: "processed",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", actualContentId);
+
+        if (updateContentError) {
+          console.error(
+            "[TransformationDashboard] Error updating content item:",
+            updateContentError,
+          );
+        }
+      } catch (openaiError) {
+        console.error(
+          "[TransformationDashboard] Error processing with OpenAI:",
+          openaiError,
+        );
+        setProcessingError(
+          openaiError.message || "Failed to process content with OpenAI",
+        );
+
+        // Update the processing job with the error
+        console.log(
+          "[TransformationDashboard] Updating processing job with error",
+        );
+        await supabase
+          .from("processing_jobs")
+          .update({
+            status: "failed",
+            error: openaiError.message,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", data.id);
       }
 
-      // Notify parent component
-      onAddToQueue(transformationConfig);
+      // Notify parent component with the transformation config and job ID
+      console.log(
+        "[TransformationDashboard] Notifying parent component with config:",
+        {
+          ...transformationConfig,
+          jobId: data?.id,
+          contentId: actualContentId,
+        },
+      );
+      onAddToQueue({
+        ...transformationConfig,
+        jobId: data?.id,
+        contentId: actualContentId,
+      });
     } catch (error) {
-      console.error("Error adding to queue:", error);
+      console.error("[TransformationDashboard] Error adding to queue:", error);
       setProcessingError(error.message || "Failed to add to processing queue");
       console.log(
-        "Detailed error information:",
+        "[TransformationDashboard] Detailed error information:",
         JSON.stringify(error, null, 2),
       );
     } finally {
       setIsProcessing(false);
+      console.log("[TransformationDashboard] Finished handleAddToQueue");
     }
   };
 
@@ -254,6 +526,19 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
     }
   };
 
+  const getContentTypeIcon = (type: string) => {
+    switch (type) {
+      case "article":
+        return <FileText className="h-4 w-4 text-blue-500" />;
+      case "video":
+        return <Video className="h-4 w-4 text-red-500" />;
+      case "podcast":
+        return <Mic className="h-4 w-4 text-purple-500" />;
+      default:
+        return <FileText className="h-4 w-4" />;
+    }
+  };
+
   return (
     <Card className="w-full max-w-3xl bg-white shadow-md">
       <CardHeader>
@@ -261,8 +546,10 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
           Transformation Dashboard
         </CardTitle>
         <CardDescription>
-          Configure how you want to transform your {contentType}:{" "}
-          <span className="font-medium">{contentTitle}</span>
+          Configure how you want to transform your content
+          {selectedContentTitle && (
+            <span className="font-medium"> {selectedContentTitle}</span>
+          )}
           {targetType && (
             <span className="ml-2 text-primary">
               (Converting to{" "}
@@ -272,6 +559,41 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {/* Content Selection Dropdown */}
+        <div className="mb-6">
+          <Label
+            htmlFor="content-selection"
+            className="text-sm font-medium mb-2 block"
+          >
+            Select Content to Transform
+          </Label>
+          <Select
+            value={selectedContentId}
+            onValueChange={(value) => setSelectedContentId(value)}
+            disabled={isLoadingContent}
+          >
+            <SelectTrigger id="content-selection" className="w-full">
+              <SelectValue placeholder="Select content to transform" />
+            </SelectTrigger>
+            <SelectContent>
+              {availableContent.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  <div className="flex items-center">
+                    {getContentTypeIcon(item.content_type)}
+                    <span className="ml-2 truncate">{item.title}</span>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {isLoadingContent && (
+            <div className="flex items-center mt-2 text-sm text-muted-foreground">
+              <Loader2 className="h-3 w-3 mr-2 animate-spin" />
+              Loading content...
+            </div>
+          )}
+        </div>
+
         <Tabs
           value={selectedTab}
           onValueChange={setSelectedTab}
@@ -490,7 +812,7 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
               <Button
                 onClick={handleAddToQueue}
                 className="gap-2"
-                disabled={isProcessing}
+                disabled={isProcessing || (!selectedContentId && !contentText)}
               >
                 {isProcessing ? (
                   <>
@@ -533,7 +855,7 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
             <p className="text-sm font-medium">Selected Transformation:</p>
             <div className="flex flex-wrap gap-1 mt-1">
               <Badge variant="outline" className="text-xs">
-                {contentType}
+                {selectedContentType || contentType}
               </Badge>
               <Badge variant="outline" className="text-xs">
                 →

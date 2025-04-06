@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import {
   Upload,
   FileText,
@@ -8,9 +8,13 @@ import {
   Link as LinkIcon,
   Loader2,
   ExternalLink,
+  Clipboard,
+  FileType,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { X } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -23,10 +27,18 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  TooltipProvider,
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
+import {
   uploadContentFile,
   saveContentItem,
   supabase,
 } from "@/services/supabase";
+import { extractTextFromPdf } from "@/services/pdfExtraction";
+import { isPdfFile } from "@/services/contentExtraction";
 import { useToast } from "@/components/ui/use-toast";
 
 interface ContentInputPanelProps {
@@ -55,6 +67,9 @@ const ContentInputPanel = ({
   const [error, setError] = useState<string | null>(null);
   const [url, setUrl] = useState<string>("");
   const [isProcessingUrl, setIsProcessingUrl] = useState<boolean>(false);
+  const [pastedText, setPastedText] = useState<string>("");
+  const [isPastingText, setIsPastingText] = useState<boolean>(false);
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -121,6 +136,61 @@ const ContentInputPanel = ({
       // Start upload progress animation
       simulateUpload();
 
+      // For text files, read the content immediately to ensure it's available for transformation
+      let textContent;
+      if (detectedType === "article") {
+        try {
+          // Try to extract text from various file types
+          if (file.type.includes("text") || file.type.includes("plain")) {
+            textContent = await file.text();
+          } else if (isPdfFile(file)) {
+            // Extract text from PDF using the PDF extraction service
+            console.log("[ContentInputPanel] Extracting text from PDF file");
+            try {
+              textContent = await extractTextFromPdf(file);
+              console.log(
+                "[ContentInputPanel] Successfully extracted text from PDF:",
+                textContent
+                  ? `${textContent.substring(0, 50)}...`
+                  : "No content",
+              );
+            } catch (pdfError) {
+              console.error(
+                "[ContentInputPanel] PDF extraction error:",
+                pdfError,
+              );
+              textContent = `Content from ${file.name}`; // Fallback if PDF extraction fails
+            }
+          } else if (file.type.includes("doc")) {
+            // For docs, we'll just use the name as a fallback until we implement proper extraction
+            textContent = `Content from ${file.name}`;
+            console.log(
+              "[ContentInputPanel] DOC extraction not implemented yet, using filename as placeholder",
+            );
+          }
+
+          console.log(
+            "[ContentInputPanel] Extracted text content from file:",
+            textContent ? `${textContent.substring(0, 50)}...` : "No content",
+            "File type:",
+            file.type,
+          );
+
+          if (!textContent || textContent.trim() === "") {
+            console.warn(
+              "[ContentInputPanel] No content extracted from file. Using filename as fallback.",
+            );
+            textContent = `Content from ${file.name}`;
+          }
+        } catch (err) {
+          console.error(
+            "[ContentInputPanel] Error extracting text from file:",
+            err,
+          );
+          textContent = `Content from ${file.name}`; // Fallback
+        }
+      }
+
       // Upload file to Supabase storage
       const { filePath, publicUrl } = await uploadContentFile(
         file,
@@ -139,13 +209,15 @@ const ContentInputPanel = ({
         previewUrl: publicUrl,
         targetType: detectedType === "article" ? targetType : null,
         user_id: userId || null,
+        content: textContent, // Ensure content is saved to database
       });
 
-      // For text files, read the content
-      let textContent;
-      if (detectedType === "article" && file.type.includes("text")) {
-        textContent = await file.text();
-      }
+      console.log("[ContentInputPanel] Content item saved to database:", {
+        id: contentItem?.id,
+        type: detectedType,
+        hasContent: !!textContent,
+        contentLength: textContent ? textContent.length : 0,
+      });
 
       // Notify parent component
       onContentUploaded({
@@ -202,6 +274,66 @@ const ContentInputPanel = ({
       simulateUpload();
 
       try {
+        // For text files, read the content immediately
+        let textContent;
+        if (type === "article") {
+          try {
+            // Try to extract text from various file types
+            if (
+              uploadedFile.type.includes("text") ||
+              uploadedFile.type.includes("plain")
+            ) {
+              textContent = await uploadedFile.text();
+            } else if (isPdfFile(uploadedFile)) {
+              // Extract text from PDF using the PDF extraction service
+              console.log(
+                "[ContentInputPanel] Extracting text from PDF file (manual selection)",
+              );
+              try {
+                textContent = await extractTextFromPdf(uploadedFile);
+                console.log(
+                  "[ContentInputPanel] Successfully extracted text from PDF (manual selection):",
+                  textContent
+                    ? `${textContent.substring(0, 50)}...`
+                    : "No content",
+                );
+              } catch (pdfError) {
+                console.error(
+                  "[ContentInputPanel] PDF extraction error (manual selection):",
+                  pdfError,
+                );
+                textContent = `Content from ${uploadedFile.name}`; // Fallback if PDF extraction fails
+              }
+            } else if (uploadedFile.type.includes("doc")) {
+              // For docs, we'll just use the name as a fallback until we implement proper extraction
+              textContent = `Content from ${uploadedFile.name}`;
+              console.log(
+                "[ContentInputPanel] DOC extraction not implemented yet, using filename as placeholder",
+              );
+            }
+
+            console.log(
+              "[ContentInputPanel] Extracted text content from file (manual selection):",
+              textContent ? `${textContent.substring(0, 50)}...` : "No content",
+              "File type:",
+              uploadedFile.type,
+            );
+
+            if (!textContent || textContent.trim() === "") {
+              console.warn(
+                "[ContentInputPanel] No content extracted from file (manual selection). Using filename as fallback.",
+              );
+              textContent = `Content from ${uploadedFile.name}`;
+            }
+          } catch (err) {
+            console.error(
+              "[ContentInputPanel] Error extracting text from file (manual selection):",
+              err,
+            );
+            textContent = `Content from ${uploadedFile.name}`; // Fallback
+          }
+        }
+
         // Upload file to Supabase storage
         const { filePath, publicUrl } = await uploadContentFile(
           uploadedFile,
@@ -220,13 +352,18 @@ const ContentInputPanel = ({
           previewUrl: publicUrl,
           targetType: type === "article" ? targetType : null,
           user_id: userId || null,
+          content: textContent, // Ensure content is saved to database
         });
 
-        // For text files, read the content
-        let textContent;
-        if (type === "article" && uploadedFile.type.includes("text")) {
-          textContent = await uploadedFile.text();
-        }
+        console.log(
+          "[ContentInputPanel] Content item saved to database (manual selection):",
+          {
+            id: contentItem?.id,
+            type: type,
+            hasContent: !!textContent,
+            contentLength: textContent ? textContent.length : 0,
+          },
+        );
 
         // Notify parent component
         onContentUploaded({
@@ -266,6 +403,7 @@ const ContentInputPanel = ({
     }
   };
 
+  // Function to fetch and extract content from a URL
   const fetchContentFromUrl = async (inputUrl: string) => {
     if (!inputUrl) {
       setError("Please enter a valid URL");
@@ -295,91 +433,59 @@ const ContentInputPanel = ({
         return;
       }
 
-      // Simulate initial processing
+      // Start processing
       setUploadProgress(20);
-      await new Promise((resolve) => setTimeout(resolve, 800));
+
+      // Import the content extraction service
+      const { fetchAndExtractContent } = await import(
+        "../services/contentExtraction"
+      );
+
+      // Extract content from URL
       setUploadProgress(40);
-
-      // Determine content type based on URL (enhanced logic)
-      let detectedType: "article" | "video" | "podcast" | "unknown" = "unknown";
-      const lowerUrl = processedUrl.toLowerCase();
-      let contentTitle = "Content from " + new URL(processedUrl).hostname;
-      let previewImage: string | undefined = undefined;
-
-      // Enhanced content type detection
-      if (
-        lowerUrl.includes("youtube.com") ||
-        lowerUrl.includes("youtu.be") ||
-        lowerUrl.includes("vimeo.com") ||
-        lowerUrl.includes("dailymotion.com") ||
-        lowerUrl.includes(".mp4") ||
-        lowerUrl.includes(".mov") ||
-        lowerUrl.includes(".avi") ||
-        lowerUrl.includes(".webm")
-      ) {
-        detectedType = "video";
-        contentTitle = "Video from " + new URL(processedUrl).hostname;
-
-        // For YouTube, we can extract a better title and thumbnail
-        if (lowerUrl.includes("youtube.com") || lowerUrl.includes("youtu.be")) {
-          // Extract video ID (simplified)
-          const videoId = lowerUrl.includes("v=")
-            ? lowerUrl.split("v=")[1].split("&")[0]
-            : lowerUrl.includes("youtu.be/")
-              ? lowerUrl.split("youtu.be/")[1].split("?")[0]
-              : "";
-
-          if (videoId) {
-            // Use YouTube thumbnail
-            previewImage = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
-            contentTitle = "YouTube Video";
-          }
-        }
-      } else if (
-        lowerUrl.includes("spotify.com/episode") ||
-        lowerUrl.includes("apple.com/podcast") ||
-        lowerUrl.includes("soundcloud.com") ||
-        lowerUrl.includes("anchor.fm") ||
-        lowerUrl.includes(".mp3") ||
-        lowerUrl.includes(".wav") ||
-        lowerUrl.includes(".ogg") ||
-        lowerUrl.includes("podcast")
-      ) {
-        detectedType = "podcast";
-        contentTitle = "Podcast from " + new URL(processedUrl).hostname;
-        previewImage =
-          "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?w=800&q=80";
-      } else if (
-        lowerUrl.includes("medium.com") ||
-        lowerUrl.includes("blog") ||
-        lowerUrl.includes("article") ||
-        lowerUrl.includes("news") ||
-        lowerUrl.includes(".pdf") ||
-        lowerUrl.includes(".doc") ||
-        lowerUrl.includes(".txt") ||
-        lowerUrl.includes("substack.com") ||
-        // Common news and article sites
-        lowerUrl.includes("nytimes.com") ||
-        lowerUrl.includes("washingtonpost.com") ||
-        lowerUrl.includes("bbc.com") ||
-        lowerUrl.includes("cnn.com") ||
-        lowerUrl.includes("theguardian.com")
-      ) {
-        detectedType = "article";
-        contentTitle = "Article from " + new URL(processedUrl).hostname;
-        previewImage =
-          "https://images.unsplash.com/photo-1457369804613-52c61a468e7d?w=800&q=80";
-      }
-
-      // Simulate more processing
+      const extractedData = await fetchAndExtractContent(processedUrl);
       setUploadProgress(60);
-      await new Promise((resolve) => setTimeout(resolve, 700));
+
+      // Map the extracted content type to our internal type
+      const detectedType = extractedData.contentType as
+        | "article"
+        | "video"
+        | "podcast"
+        | "unknown";
+      const contentTitle =
+        extractedData.title || `Content from ${new URL(processedUrl).hostname}`;
+      const previewImage = extractedData.imageUrl;
+      const extractedContent = extractedData.content;
+      const extractedDescription = extractedData.description;
+
+      console.log("[ContentInputPanel] Extracted content from URL:", {
+        url: processedUrl,
+        type: detectedType,
+        title: contentTitle,
+        hasContent: !!extractedContent,
+        contentLength: extractedContent ? extractedContent.length : 0,
+      });
+
       setUploadProgress(80);
 
-      // Create a mock file object from the URL
+      // Ensure we have actual content to work with
+      const finalContent =
+        extractedContent && extractedContent.trim() !== ""
+          ? extractedContent
+          : `Content from ${new URL(processedUrl).hostname}`;
+
+      console.log(
+        "[ContentInputPanel] Final content from URL:",
+        finalContent ? `${finalContent.substring(0, 50)}...` : "No content",
+        "Content length:",
+        finalContent ? finalContent.length : 0,
+      );
+
+      const contentBlob = new Blob([finalContent], { type: "text/plain" });
+
       const mockFile = new File(
-        ["dummy content"],
-        `content-from-${new URL(processedUrl).hostname}`,
+        [contentBlob],
+        `content-from-${new URL(processedUrl).hostname}.txt`,
         {
           type:
             detectedType === "article"
@@ -414,14 +520,21 @@ const ContentInputPanel = ({
             previewUrl: previewImage || processedUrl,
             targetType: detectedType === "article" ? targetType : null,
             user_id: userId || null,
+            content: finalContent, // Ensure content is saved to database
+            description: extractedDescription,
+            author: extractedData.author,
+            publishDate: extractedData.publishDate,
           });
 
-          // For URLs, we'll fetch the content in a real implementation
-          // This is a placeholder for demonstration purposes
-          const textContent =
-            detectedType === "article"
-              ? "This is placeholder text content that would be fetched from the URL in a real implementation."
-              : undefined;
+          console.log(
+            "[ContentInputPanel] Content item from URL saved to database:",
+            {
+              id: contentItem?.id,
+              type: detectedType,
+              hasContent: !!finalContent,
+              contentLength: finalContent ? finalContent.length : 0,
+            },
+          );
 
           // Notify parent component
           onContentUploaded({
@@ -430,7 +543,7 @@ const ContentInputPanel = ({
             preview: previewImage || processedUrl,
             targetType: detectedType === "article" ? targetType : null,
             title: contentTitle,
-            content: textContent,
+            content: finalContent,
             id: contentItem?.id,
           });
 
@@ -462,9 +575,10 @@ const ContentInputPanel = ({
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="upload" className="w-full">
-          <TabsList className="grid w-full grid-cols-2 mb-3">
+          <TabsList className="grid w-full grid-cols-3 mb-3">
             <TabsTrigger value="upload">Upload File</TabsTrigger>
             <TabsTrigger value="url">From URL</TabsTrigger>
+            <TabsTrigger value="paste">Paste Text</TabsTrigger>
           </TabsList>
 
           <TabsContent value="upload">
@@ -603,6 +717,222 @@ const ContentInputPanel = ({
                 </div>
               </div>
             )}
+          </TabsContent>
+
+          <TabsContent value="paste">
+            <div className="flex flex-col space-y-3">
+              <div className="relative">
+                <Textarea
+                  ref={textAreaRef}
+                  placeholder="Paste or type your content here..."
+                  value={pastedText}
+                  onChange={(e) => setPastedText(e.target.value)}
+                  className="min-h-[150px] resize-none"
+                  disabled={isPastingText}
+                />
+                {pastedText.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-2 right-2 h-6 w-6 p-0"
+                    onClick={() => setPastedText("")}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                )}
+              </div>
+
+              <div className="flex justify-between items-center">
+                <p className="text-xs text-muted-foreground">
+                  {pastedText.length} characters
+                </p>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs h-8 px-3"
+                        onClick={() => {
+                          navigator.clipboard.readText().then(
+                            (text) => {
+                              setPastedText(text);
+                              toast({
+                                title: "Content pasted",
+                                description:
+                                  "Text has been pasted from clipboard",
+                              });
+                            },
+                            () => {
+                              toast({
+                                title: "Paste failed",
+                                description: "Could not access clipboard",
+                                variant: "destructive",
+                              });
+                            },
+                          );
+                        }}
+                      >
+                        <Clipboard className="h-3.5 w-3.5 mr-1.5" /> Paste from
+                        Clipboard
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Paste content from clipboard</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+
+              {pastedText.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-xs font-medium mb-2">
+                    Convert this text to:
+                  </p>
+                  <div className="flex space-x-2">
+                    <Button
+                      size="sm"
+                      variant={targetType === "audio" ? "default" : "outline"}
+                      onClick={() => setTargetType("audio")}
+                      className="text-xs h-8 px-3"
+                    >
+                      <Mic className="h-3.5 w-3.5 mr-1.5" /> Audio Podcast
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={targetType === "video" ? "default" : "outline"}
+                      onClick={() => setTargetType("video")}
+                      className="text-xs h-8 px-3"
+                    >
+                      <Video className="h-3.5 w-3.5 mr-1.5" /> Video
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={targetType === null ? "default" : "outline"}
+                      onClick={() => setTargetType(null)}
+                      className="text-xs h-8 px-3"
+                    >
+                      <FileText className="h-3.5 w-3.5 mr-1.5" /> Text Only
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <Button
+                onClick={async () => {
+                  if (!pastedText.trim()) {
+                    setError("Please enter some text content");
+                    return;
+                  }
+
+                  setError(null);
+                  setIsPastingText(true);
+                  simulateUpload();
+
+                  try {
+                    // Validate pasted text content
+                    if (!pastedText || pastedText.trim() === "") {
+                      setError(
+                        "The pasted text is empty. Please enter some content.",
+                      );
+                      return;
+                    }
+
+                    console.log(
+                      "[ContentInputPanel] Processing pasted text:",
+                      pastedText
+                        ? `${pastedText.substring(0, 50)}...`
+                        : "No content",
+                      "Content length:",
+                      pastedText ? pastedText.length : 0,
+                    );
+
+                    // Create a text file from the pasted content
+                    const textBlob = new Blob([pastedText], {
+                      type: "text/plain",
+                    });
+                    const textFile = new File(
+                      [textBlob],
+                      "pasted-content.txt",
+                      { type: "text/plain" },
+                    );
+
+                    // Get current user
+                    const { data: userData } = await supabase.auth.getUser();
+                    const userId = userData.user?.id;
+
+                    console.log("[ContentInputPanel] Pasted text details:", {
+                      contentLength: pastedText.length,
+                      preview: pastedText.substring(0, 50) + "...",
+                      targetType,
+                      hasContent: !!pastedText && pastedText.trim() !== "",
+                    });
+
+                    // Save content metadata to database
+                    const contentItem = await saveContentItem({
+                      title: pastedText.substring(0, 30) + "...",
+                      contentType: "article",
+                      content: pastedText, // Ensure content is saved to database
+                      targetType: targetType,
+                      user_id: userId || null,
+                    });
+
+                    console.log(
+                      "[ContentInputPanel] Pasted text saved to database:",
+                      {
+                        id: contentItem?.id,
+                        contentLength: pastedText.length,
+                      },
+                    );
+
+                    // Notify parent component
+                    onContentUploaded({
+                      type: "article",
+                      file: textFile,
+                      targetType: targetType,
+                      title: pastedText.substring(0, 30) + "...",
+                      content: pastedText,
+                      id: contentItem?.id,
+                    });
+
+                    toast({
+                      title: "Content processed",
+                      description:
+                        "Your pasted text has been processed successfully.",
+                    });
+                  } catch (err) {
+                    console.error("Error processing pasted text:", err);
+                    setError(
+                      `Failed to process text: ${err instanceof Error ? err.message : "Unknown error"}`,
+                    );
+                  } finally {
+                    setIsPastingText(false);
+                  }
+                }}
+                disabled={!pastedText.trim() || isPastingText}
+                className="mt-2"
+              >
+                {isPastingText ? (
+                  <span className="flex items-center">
+                    <Loader2 className="animate-spin h-4 w-4 mr-1.5" />
+                    Processing
+                  </span>
+                ) : (
+                  <span className="flex items-center">
+                    <FileText className="h-4 w-4 mr-1.5" />
+                    Process Text
+                  </span>
+                )}
+              </Button>
+
+              {error && (
+                <Alert variant="destructive" className="mt-2">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Error</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+            </div>
           </TabsContent>
 
           <TabsContent value="url">
