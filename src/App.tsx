@@ -18,7 +18,6 @@ export default function App() {
     <>
       {/* Render the tempo routes conditionally */}
       {tempoRoutes}
-
       <div className="min-h-screen bg-background flex flex-col">
         <NavigationBar />
         <main className="flex-1">
@@ -33,11 +32,6 @@ export default function App() {
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </main>
-        <footer className="border-t py-3 bg-background mt-auto">
-          <div className="container mx-auto px-4 text-center text-xs text-muted-foreground">
-            © 2023 Content Repurposer. All rights reserved.
-          </div>
-        </footer>
       </div>
     </>
   );

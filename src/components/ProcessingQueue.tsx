@@ -133,14 +133,14 @@ const ProcessingQueue = ({
   };
 
   return (
-    <Card className="w-full h-full bg-background shadow-sm">
+    <Card className="w-full bg-background shadow-sm">
       <CardHeader className="pb-3 pt-5 px-6">
         <CardTitle className="text-lg font-semibold">
           Processing Queue
         </CardTitle>
       </CardHeader>
       <CardContent className="px-6 pb-5">
-        <ScrollArea className="h-[280px] pr-4">
+        <ScrollArea className="pr-4 h-full">
           <div className="space-y-4">
             {queueItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-[220px] text-muted-foreground">

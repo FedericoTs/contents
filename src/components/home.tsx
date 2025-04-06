@@ -10,18 +10,17 @@ import ProcessingQueue from "./ProcessingQueue";
 
 const Home = () => {
   return (
-    <div className="container mx-auto px-4 py-6">
+    <div className="container mx-auto px-4 py-6 pb-16 min-h-[calc(100vh-8rem)] h-full">
       {/* Main Content */}
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">Content Repurposing Dashboard</h2>
         <div className="flex gap-3">
-          <Button className="flex items-center gap-2">
+          <Button className="flex items-center gap-2 bg-orange-600 hover:bg-orange-500">
             <Plus className="h-4 w-4" /> New Project
           </Button>
         </div>
       </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
         {/* Left Column */}
         <div className="lg:col-span-4 space-y-6">
           <ContentInputPanel />
@@ -30,7 +29,9 @@ const Home = () => {
 
         {/* Right Column */}
         <div className="lg:col-span-8 space-y-6">
-          <TransformationDashboard />
+          <div className="bg-white rounded-lg border shadow-sm p-6">
+            <TransformationDashboard />
+          </div>
           <OutputPreview />
         </div>
       </div>

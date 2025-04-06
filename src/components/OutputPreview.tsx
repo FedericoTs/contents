@@ -144,9 +144,8 @@ const OutputPreview = ({
   };
 
   return (
-    <div className="w-full h-full bg-background p-6 rounded-lg">
+    <div className="w-full bg-background p-6 rounded-lg">
       <h2 className="text-2xl font-bold mb-6">Output Preview</h2>
-
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Original Content */}
         <Card className="h-full">
@@ -207,7 +206,7 @@ const OutputPreview = ({
             </div>
             <Tabs defaultValue={repurposedContent[0].type} className="w-full">
               <TabsList className="grid grid-cols-5 w-full">
-                <TabsTrigger value="social">Social Media</TabsTrigger>
+                <TabsTrigger value="social">Social</TabsTrigger>
                 <TabsTrigger value="newsletter">Newsletter</TabsTrigger>
                 <TabsTrigger value="blog">Blog</TabsTrigger>
                 <TabsTrigger value="audio">Audio</TabsTrigger>
@@ -412,40 +411,36 @@ const OutputPreview = ({
             </Tabs>
           </CardHeader>
           <CardFooter className="flex justify-between">
-            <div className="flex gap-2">
+            <div className="flex gap-1.5">
               {isEditing ? (
-                <Button onClick={handleSave}>Save Changes</Button>
+                <Button size="sm" onClick={handleSave}>
+                  Save
+                </Button>
               ) : (
-                <Button variant="outline" onClick={handleEdit}>
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit
+                <Button size="sm" variant="outline" onClick={handleEdit}>
+                  <Edit className="h-4 w-4" />
                 </Button>
               )}
-              <Button variant="outline" onClick={handleCopy}>
+              <Button size="sm" variant="outline" onClick={handleCopy}>
                 {copied ? (
-                  <Check className="h-4 w-4 mr-2" />
+                  <Check className="h-4 w-4" />
                 ) : (
-                  <Copy className="h-4 w-4 mr-2" />
+                  <Copy className="h-4 w-4" />
                 )}
-                {copied ? "Copied" : "Copy"}
               </Button>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline">
-                <Download className="h-4 w-4 mr-2" />
-                Download
+            <div className="flex gap-1.5">
+              <Button size="sm" variant="outline">
+                <Download className="h-4 w-4" />
               </Button>
-              <Button>
-                <Share2 className="h-4 w-4 mr-2" />
-                Share
+              <Button size="sm">
+                <Share2 className="h-4 w-4" />
               </Button>
             </div>
           </CardFooter>
         </Card>
       </div>
-
       <Separator className="my-8" />
-
       <div className="mt-6">
         <h3 className="text-lg font-semibold mb-4">Content Comparison</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
