@@ -1,9 +1,10 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Trash2,
   Play,
@@ -11,9 +12,16 @@ import {
   CheckCircle,
   AlertCircle,
   Clock,
+  Loader2,
 } from "lucide-react";
+import {
+  getProcessingJobs,
+  processContentItem,
+} from "@/services/processingService";
+import { supabase } from "@/services/supabase";
+import { useAuth } from "@/contexts/AuthContext";
 
-interface QueueItem {
+export interface QueueItem {
   id: string;
   title: string;
   sourceType: "article" | "video" | "podcast";
@@ -21,6 +29,7 @@ interface QueueItem {
   targetType?: "audio" | "video" | null;
   progress: number;
   status: "pending" | "processing" | "completed" | "failed";
+  error?: string;
 }
 
 interface ProcessingQueueProps {
@@ -28,77 +37,172 @@ interface ProcessingQueueProps {
   onRemoveItem?: (id: string) => void;
   onStartProcessing?: (id: string) => void;
   onPauseProcessing?: (id: string) => void;
+  onItemProcessed?: (result: any) => void;
 }
 
 const ProcessingQueue = ({
-  items = [
-    {
-      id: "1",
-      title: "Blog post about AI trends",
-      sourceType: "article",
-      targetFormat: "Social Media Posts",
-      progress: 75,
-      status: "processing",
-    },
-    {
-      id: "2",
-      title: "Product demo video",
-      sourceType: "video",
-      targetFormat: "Blog Article",
-      progress: 100,
-      status: "completed",
-    },
-    {
-      id: "3",
-      title: "Interview with industry expert",
-      sourceType: "podcast",
-      targetFormat: "Newsletter",
-      progress: 0,
-      status: "pending",
-    },
-    {
-      id: "5",
-      title: "Research paper on AI ethics",
-      sourceType: "article",
-      targetFormat: "Audio Podcast",
-      targetType: "audio",
-      progress: 45,
-      status: "processing",
-    },
-    {
-      id: "6",
-      title: "Marketing strategy document",
-      sourceType: "article",
-      targetFormat: "Video Content",
-      targetType: "video",
-      progress: 10,
-      status: "processing",
-    },
-    {
-      id: "4",
-      title: "Technical tutorial",
-      sourceType: "video",
-      targetFormat: "How-to Guide",
-      progress: 30,
-      status: "failed",
-    },
-  ],
+  items: initialItems,
   onRemoveItem = () => {},
   onStartProcessing = () => {},
   onPauseProcessing = () => {},
+  onItemProcessed = () => {},
 }: ProcessingQueueProps) => {
-  const [queueItems, setQueueItems] = useState<QueueItem[]>(items);
+  const { user } = useAuth();
+  const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleRemoveItem = (id: string) => {
-    setQueueItems(queueItems.filter((item) => item.id !== id));
-    onRemoveItem(id);
+  // Fetch processing jobs from the database
+  useEffect(() => {
+    if (initialItems) {
+      setQueueItems(initialItems);
+      setLoading(false);
+      return;
+    }
+
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    const fetchJobs = async () => {
+      try {
+        const jobs = await getProcessingJobs(user.id);
+        const formattedJobs = jobs.map((job) => ({
+          id: job.id,
+          title: job.content_items?.title || "Untitled Content",
+          sourceType: job.content_items?.content_type || "article",
+          targetFormat: job.target_format,
+          targetType: job.content_items?.target_type,
+          progress:
+            job.status === "completed"
+              ? 100
+              : job.status === "failed"
+                ? 0
+                : job.status === "processing"
+                  ? 50
+                  : 0,
+          status: job.status,
+          error: job.error,
+        }));
+        setQueueItems(formattedJobs);
+      } catch (err) {
+        console.error("Error fetching processing jobs:", err);
+        setError("Failed to load processing queue");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchJobs();
+
+    // Set up real-time subscription for job updates
+    const subscription = supabase
+      .channel("processing_jobs_changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "processing_jobs",
+        },
+        (payload) => {
+          // Refresh the jobs list when there's a change
+          fetchJobs();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [user, initialItems]);
+
+  const handleRemoveItem = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from("processing_jobs")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+
+      setQueueItems(queueItems.filter((item) => item.id !== id));
+      onRemoveItem(id);
+    } catch (err) {
+      console.error("Error removing job:", err);
+      setError("Failed to remove job from queue");
+    }
   };
 
-  const handleStartProcessing = (id: string) => {
-    onStartProcessing(id);
+  const handleStartProcessing = async (id: string) => {
+    try {
+      // Find the job in the queue
+      const job = queueItems.find((item) => item.id === id);
+      if (!job) return;
+
+      // Update UI immediately to show processing
+      setQueueItems((items) =>
+        items.map((item) =>
+          item.id === id
+            ? { ...item, status: "processing", progress: 10 }
+            : item,
+        ),
+      );
+
+      // Get the content item ID and options from the database
+      const { data: jobData, error: jobError } = await supabase
+        .from("processing_jobs")
+        .select("content_id, options")
+        .eq("id", id)
+        .single();
+
+      if (jobError) throw jobError;
+      if (!jobData) throw new Error("Job not found");
+
+      // Start processing
+      onStartProcessing(id);
+
+      // Process the content
+      const result = await processContentItem(
+        jobData.content_id,
+        jobData.options,
+      );
+
+      // Update UI to show completion
+      setQueueItems((items) =>
+        items.map((item) =>
+          item.id === id
+            ? { ...item, status: "completed", progress: 100 }
+            : item,
+        ),
+      );
+
+      // Notify parent component
+      onItemProcessed(result);
+    } catch (err) {
+      console.error("Error processing content:", err);
+      setError("Failed to process content");
+
+      // Update UI to show failure
+      setQueueItems((items) =>
+        items.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                status: "failed",
+                progress: 0,
+                error: err.message,
+              }
+            : item,
+        ),
+      );
+    }
   };
 
   const handlePauseProcessing = (id: string) => {
+    // In this implementation, we can't actually pause OpenAI processing
+    // This would be implemented if using a different processing method
     onPauseProcessing(id);
   };
 
@@ -107,7 +211,7 @@ const ProcessingQueue = ({
       case "pending":
         return <Clock className="h-4 w-4 text-muted-foreground" />;
       case "processing":
-        return <Play className="h-4 w-4 text-blue-500" />;
+        return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
       case "completed":
         return <CheckCircle className="h-4 w-4 text-green-500" />;
       case "failed":
@@ -140,9 +244,23 @@ const ProcessingQueue = ({
         </CardTitle>
       </CardHeader>
       <CardContent className="px-6 pb-5">
-        <ScrollArea className="pr-4 h-full">
+        {error && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        <ScrollArea className="pr-4 h-full max-h-[400px]">
           <div className="space-y-4">
-            {queueItems.length === 0 ? (
+            {loading ? (
+              <div className="flex flex-col items-center justify-center h-[220px]">
+                <Loader2 className="h-8 w-8 text-primary animate-spin mb-2" />
+                <p className="text-muted-foreground">
+                  Loading processing queue...
+                </p>
+              </div>
+            ) : queueItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-[220px] text-muted-foreground">
                 <p>No items in queue</p>
                 <p className="text-sm mt-1">
@@ -181,7 +299,9 @@ const ProcessingQueue = ({
                     <Progress value={item.progress} className="h-2.5" />
                     <div className="flex justify-between items-center mt-3">
                       <span className="text-xs text-muted-foreground">
-                        {item.progress}% complete
+                        {item.status === "processing"
+                          ? "Processing..."
+                          : `${item.progress}% complete`}
                       </span>
                       <div className="flex gap-2">
                         {item.status === "pending" && (
@@ -200,6 +320,8 @@ const ProcessingQueue = ({
                             size="sm"
                             className="h-8 w-8 p-0"
                             onClick={() => handlePauseProcessing(item.id)}
+                            disabled
+                            title="Cannot pause OpenAI processing"
                           >
                             <Pause className="h-4 w-4" />
                           </Button>
@@ -214,6 +336,11 @@ const ProcessingQueue = ({
                         </Button>
                       </div>
                     </div>
+                    {item.error && (
+                      <div className="mt-2 text-xs text-destructive">
+                        Error: {item.error}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))

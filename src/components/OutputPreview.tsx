@@ -36,6 +36,7 @@ interface OutputPreviewProps {
     mediaUrl?: string;
     mediaType?: "audio" | "video";
   }[];
+  processingResult?: any;
 }
 
 const OutputPreview = ({
@@ -47,7 +48,7 @@ const OutputPreview = ({
     thumbnail:
       "https://images.unsplash.com/photo-1677442135968-6d89469c5f97?w=800&q=80",
   },
-  repurposedContent = [
+  repurposedContent: initialRepurposedContent = [
     {
       type: "social",
       title: "Twitter Post",
@@ -86,7 +87,117 @@ const OutputPreview = ({
       mediaType: "video",
     },
   ],
+  processingResult,
 }: OutputPreviewProps) => {
+  // Process the result from OpenAI if available
+  const repurposedContent = React.useMemo(() => {
+    if (!processingResult) return initialRepurposedContent;
+
+    try {
+      // If the result is a JSON string, parse it
+      if (
+        typeof processingResult === "string" &&
+        processingResult.trim().startsWith("[")
+      ) {
+        try {
+          // Try to parse as JSON array of social posts
+          const parsedContent = JSON.parse(processingResult);
+          if (Array.isArray(parsedContent)) {
+            return parsedContent.map((post) => ({
+              type: "social",
+              title: post.platform || "Social Post",
+              content: post.content,
+              platform: post.platform?.toLowerCase() || "generic",
+              hashtags: post.hashtags,
+            }));
+          }
+        } catch (e) {
+          console.log("Not valid JSON, treating as text");
+        }
+      }
+
+      // If it's a string but not JSON, or parsing failed
+      if (typeof processingResult === "string") {
+        // Determine the type based on content patterns
+        let type = "blog-article";
+        let title = "Generated Content";
+
+        if (
+          processingResult.includes("Subject:") ||
+          processingResult.includes("Dear")
+        ) {
+          type = "newsletter";
+          title = "Generated Newsletter";
+
+          // Try to extract subject line
+          const subjectMatch = processingResult.match(/Subject:\s*([^\n]+)/);
+          if (subjectMatch && subjectMatch[1]) {
+            title = subjectMatch[1];
+          }
+        } else if (
+          processingResult.includes("SCENE") ||
+          processingResult.includes("CUT TO:")
+        ) {
+          type = "video";
+          title = "Video Script";
+        } else if (
+          processingResult.includes("HOST:") ||
+          processingResult.includes("SPEAKER")
+        ) {
+          type = "podcast";
+          title = "Podcast Script";
+        }
+
+        return [
+          {
+            type,
+            title,
+            content: processingResult,
+            platform: type === "newsletter" ? "email" : undefined,
+          },
+        ];
+      }
+
+      // If it's an object with text/audioUrl/videoUrl properties
+      if (typeof processingResult === "object" && processingResult !== null) {
+        const results = [];
+
+        if (processingResult.text) {
+          results.push({
+            type: "blog-article",
+            title: "Generated Text Content",
+            content: processingResult.text,
+          });
+        }
+
+        if (processingResult.audioUrl) {
+          results.push({
+            type: "audio",
+            title: "Generated Audio",
+            content: "AI-generated audio based on your content.",
+            mediaUrl: processingResult.audioUrl,
+            mediaType: "audio",
+          });
+        }
+
+        if (processingResult.videoUrl) {
+          results.push({
+            type: "video",
+            title: "Generated Video",
+            content: "AI-generated video based on your content.",
+            mediaUrl: processingResult.videoUrl,
+            mediaType: "video",
+          });
+        }
+
+        return results.length > 0 ? results : initialRepurposedContent;
+      }
+    } catch (error) {
+      console.error("Error processing result:", error);
+    }
+
+    return initialRepurposedContent;
+  }, [processingResult, initialRepurposedContent]);
   const [selectedTemplate, setSelectedTemplate] = useState("default");
   const [activeRepurposedContent, setActiveRepurposedContent] = useState(
     repurposedContent[0],

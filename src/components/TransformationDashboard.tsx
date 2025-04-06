@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { supabase } from "@/services/supabase";
 import {
   Card,
   CardContent,
@@ -41,6 +42,8 @@ interface TransformationDashboardProps {
   contentType?: "article" | "video" | "podcast";
   contentTitle?: string;
   targetType?: "audio" | "video" | null;
+  contentId?: string;
+  contentText?: string;
 }
 
 interface TransformationConfig {
@@ -62,6 +65,8 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
   contentType = "article",
   contentTitle = "Untitled Content",
   targetType = null,
+  contentId,
+  contentText,
 }) => {
   const [selectedTab, setSelectedTab] = useState("format");
   const [targetFormat, setTargetFormat] = useState("social-posts");
@@ -70,12 +75,18 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
   const [contentTone, setContentTone] = useState("professional");
   const [preserveKeyPoints, setPreserveKeyPoints] = useState(true);
   const [sampleOutput, setSampleOutput] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processedContent, setProcessedContent] = useState<string | null>(null);
+  const [processingError, setProcessingError] = useState<string | null>(null);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([
     "instagram",
     "twitter",
   ]);
 
-  const handleAddToQueue = () => {
+  const handleAddToQueue = async () => {
+    setIsProcessing(true);
+    setProcessingError(null);
+
     const transformationConfig: TransformationConfig = {
       sourceType: contentType,
       targetFormat,
@@ -90,7 +101,132 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
       },
     };
 
-    onAddToQueue(transformationConfig);
+    try {
+      // Create processing options
+      const processingOptions = {
+        contentType,
+        targetFormat,
+        tone: contentTone,
+        length: contentLength,
+        preserveKeyPoints,
+        platforms: selectedPlatforms,
+        customInstructions:
+          sampleOutput.trim() !== "" ? sampleOutput : undefined,
+      };
+
+      // First, check if the content_id exists in content_items table
+      let actualContentId = contentId;
+
+      if (actualContentId) {
+        // Verify the content_id exists
+        const { data: contentExists, error: contentCheckError } = await supabase
+          .from("content_items")
+          .select("id")
+          .eq("id", actualContentId)
+          .single();
+
+        if (contentCheckError || !contentExists) {
+          console.log("Content ID not found, creating a new content item");
+          actualContentId = null; // Reset to create a new one
+        }
+      }
+
+      // If no valid content_id, create a new content item first
+      if (!actualContentId) {
+        const { data: newContent, error: newContentError } = await supabase
+          .from("content_items")
+          .insert({
+            title: contentTitle,
+            content_type: contentType,
+            status: "pending",
+          })
+          .select()
+          .single();
+
+        if (newContentError) throw newContentError;
+        actualContentId = newContent.id;
+      }
+
+      // Create a processing job in the database
+      const { data, error } = await supabase
+        .from("processing_jobs")
+        .insert({
+          content_id: actualContentId,
+          target_format: targetFormat,
+          status: "pending",
+          options: processingOptions,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // If we have content text, process it directly using OpenAI
+      if (contentText) {
+        try {
+          // Import the OpenAI service
+          const { processTextContent } = await import(
+            "../services/openaiService"
+          );
+
+          // Process the content
+          const result = await processTextContent(
+            contentText,
+            processingOptions,
+          );
+
+          // Update the processing job with the result
+          await supabase
+            .from("processing_jobs")
+            .update({
+              status: "completed",
+              result,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", data.id);
+
+          // Set the processed content
+          setProcessedContent(result);
+
+          // Update the content item with the processed content
+          await supabase
+            .from("content_items")
+            .update({
+              processed_content: result,
+              status: "processed",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", actualContentId);
+        } catch (openaiError) {
+          console.error("Error processing with OpenAI:", openaiError);
+          setProcessingError(
+            openaiError.message || "Failed to process content with OpenAI",
+          );
+
+          // Update the processing job with the error
+          await supabase
+            .from("processing_jobs")
+            .update({
+              status: "failed",
+              error: openaiError.message,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", data.id);
+        }
+      }
+
+      // Notify parent component
+      onAddToQueue(transformationConfig);
+    } catch (error) {
+      console.error("Error adding to queue:", error);
+      setProcessingError(error.message || "Failed to add to processing queue");
+      console.log(
+        "Detailed error information:",
+        JSON.stringify(error, null, 2),
+      );
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const togglePlatform = (platform: string) => {
@@ -351,38 +487,92 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
               >
                 Back
               </Button>
-              <Button onClick={handleAddToQueue} className="gap-2">
-                <Sparkles className="h-4 w-4" />
-                Add to Processing Queue
+              <Button
+                onClick={handleAddToQueue}
+                className="gap-2"
+                disabled={isProcessing}
+              >
+                {isProcessing ? (
+                  <>
+                    <svg
+                      className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4" />
+                    Add to Processing Queue
+                  </>
+                )}
               </Button>
             </div>
           </TabsContent>
         </Tabs>
       </CardContent>
-      <CardFooter className="flex justify-between border-t pt-4">
-        <div>
-          <p className="text-sm font-medium">Selected Transformation:</p>
-          <div className="flex flex-wrap gap-1 mt-1">
-            <Badge variant="outline" className="text-xs">
-              {contentType}
-            </Badge>
-            <Badge variant="outline" className="text-xs">
-              →
-            </Badge>
-            <Badge className="text-xs">{targetFormat.replace("-", " ")}</Badge>
-            {targetFormat === "social-posts" &&
-              selectedPlatforms.map((platform) => (
-                <Badge
-                  key={platform}
-                  variant="secondary"
-                  className="text-xs flex items-center gap-1"
-                >
-                  {getPlatformIcon(platform)}
-                  {platform}
-                </Badge>
-              ))}
+      <CardFooter className="flex flex-col border-t pt-4">
+        <div className="flex justify-between w-full">
+          <div>
+            <p className="text-sm font-medium">Selected Transformation:</p>
+            <div className="flex flex-wrap gap-1 mt-1">
+              <Badge variant="outline" className="text-xs">
+                {contentType}
+              </Badge>
+              <Badge variant="outline" className="text-xs">
+                →
+              </Badge>
+              <Badge className="text-xs">
+                {targetFormat.replace("-", " ")}
+              </Badge>
+              {targetFormat === "social-posts" &&
+                selectedPlatforms.map((platform) => (
+                  <Badge
+                    key={platform}
+                    variant="secondary"
+                    className="text-xs flex items-center gap-1"
+                  >
+                    {getPlatformIcon(platform)}
+                    {platform}
+                  </Badge>
+                ))}
+            </div>
           </div>
         </div>
+
+        {processingError && (
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-600 text-sm">
+            <p className="font-medium">Error:</p>
+            <p>{processingError}</p>
+          </div>
+        )}
+
+        {processedContent && (
+          <div className="mt-4 w-full">
+            <p className="text-sm font-medium mb-2">Processed Content:</p>
+            <div className="p-3 bg-muted/20 border rounded-md max-h-60 overflow-y-auto">
+              <pre className="text-xs whitespace-pre-wrap">
+                {processedContent}
+              </pre>
+            </div>
+          </div>
+        )}
       </CardFooter>
     </Card>
   );

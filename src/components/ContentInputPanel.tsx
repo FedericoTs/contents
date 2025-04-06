@@ -36,6 +36,8 @@ interface ContentInputPanelProps {
     preview?: string;
     targetType?: "audio" | "video" | null;
     title?: string;
+    content?: string;
+    id?: string;
   }) => void;
 }
 
@@ -130,7 +132,7 @@ const ContentInputPanel = ({
       const userId = userData.user?.id;
 
       // Save content metadata to database
-      await saveContentItem({
+      const contentItem = await saveContentItem({
         title: file.name,
         contentType: detectedType,
         filePath,
@@ -139,6 +141,12 @@ const ContentInputPanel = ({
         user_id: userId || null,
       });
 
+      // For text files, read the content
+      let textContent;
+      if (detectedType === "article" && file.type.includes("text")) {
+        textContent = await file.text();
+      }
+
       // Notify parent component
       onContentUploaded({
         type: detectedType,
@@ -146,6 +154,8 @@ const ContentInputPanel = ({
         preview: publicUrl,
         targetType: detectedType === "article" ? targetType : null,
         title: file.name,
+        content: textContent,
+        id: contentItem?.id,
       });
 
       toast({
@@ -203,7 +213,7 @@ const ContentInputPanel = ({
         const userId = userData.user?.id;
 
         // Save content metadata to database
-        await saveContentItem({
+        const contentItem = await saveContentItem({
           title: uploadedFile.name,
           contentType: type,
           filePath,
@@ -212,6 +222,12 @@ const ContentInputPanel = ({
           user_id: userId || null,
         });
 
+        // For text files, read the content
+        let textContent;
+        if (type === "article" && uploadedFile.type.includes("text")) {
+          textContent = await uploadedFile.text();
+        }
+
         // Notify parent component
         onContentUploaded({
           type: type,
@@ -219,6 +235,8 @@ const ContentInputPanel = ({
           preview: publicUrl,
           targetType: type === "article" ? targetType : null,
           title: uploadedFile.name,
+          content: textContent,
+          id: contentItem?.id,
         });
 
         toast({
@@ -389,7 +407,7 @@ const ContentInputPanel = ({
           const userId = userData.user?.id;
 
           // Save content metadata to database
-          await saveContentItem({
+          const contentItem = await saveContentItem({
             title: contentTitle,
             contentType: detectedType,
             url: processedUrl,
@@ -398,6 +416,13 @@ const ContentInputPanel = ({
             user_id: userId || null,
           });
 
+          // For URLs, we'll fetch the content in a real implementation
+          // This is a placeholder for demonstration purposes
+          const textContent =
+            detectedType === "article"
+              ? "This is placeholder text content that would be fetched from the URL in a real implementation."
+              : undefined;
+
           // Notify parent component
           onContentUploaded({
             type: detectedType,
@@ -405,6 +430,8 @@ const ContentInputPanel = ({
             preview: previewImage || processedUrl,
             targetType: detectedType === "article" ? targetType : null,
             title: contentTitle,
+            content: textContent,
+            id: contentItem?.id,
           });
 
           toast({
