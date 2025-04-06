@@ -22,6 +22,12 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  uploadContentFile,
+  saveContentItem,
+  supabase,
+} from "@/services/supabase";
+import { useToast } from "@/components/ui/use-toast";
 
 interface ContentInputPanelProps {
   onContentUploaded?: (content: {
@@ -36,6 +42,7 @@ interface ContentInputPanelProps {
 const ContentInputPanel = ({
   onContentUploaded = () => {},
 }: ContentInputPanelProps) => {
+  const { toast } = useToast();
   const [isDragging, setIsDragging] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [contentType, setContentType] = useState<
@@ -97,7 +104,7 @@ const ContentInputPanel = ({
     }, 100);
   };
 
-  const processFile = (file: File) => {
+  const processFile = async (file: File) => {
     setError(null);
     setUploadedFile(file);
     const detectedType = detectContentType(file);
@@ -105,17 +112,53 @@ const ContentInputPanel = ({
 
     if (detectedType === "unknown") {
       setError("Unable to detect content type. Please select manually.");
-    } else {
+      return;
+    }
+
+    try {
+      // Start upload progress animation
       simulateUpload();
 
-      // Simulate processing delay
-      setTimeout(() => {
-        onContentUploaded({
-          type: detectedType,
-          file: file,
-          targetType: detectedType === "article" ? targetType : null,
-        });
-      }, 2000);
+      // Upload file to Supabase storage
+      const { filePath, publicUrl } = await uploadContentFile(
+        file,
+        detectedType,
+      );
+
+      // Get current user
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData.user?.id;
+
+      // Save content metadata to database
+      await saveContentItem({
+        title: file.name,
+        contentType: detectedType,
+        filePath,
+        previewUrl: publicUrl,
+        targetType: detectedType === "article" ? targetType : null,
+        user_id: userId || null,
+      });
+
+      // Notify parent component
+      onContentUploaded({
+        type: detectedType,
+        file: file,
+        preview: publicUrl,
+        targetType: detectedType === "article" ? targetType : null,
+        title: file.name,
+      });
+
+      toast({
+        title: "Content uploaded",
+        description: `Your ${detectedType} has been uploaded successfully.`,
+      });
+    } catch (err) {
+      console.error("Error processing file:", err);
+      console.log("Detailed error information:", JSON.stringify(err, null, 2));
+      setError(
+        `Failed to upload content: ${err instanceof Error ? err.message : "Unknown error"}`,
+      );
+      setUploadProgress(0);
     }
   };
 
@@ -140,19 +183,53 @@ const ContentInputPanel = ({
     }
   };
 
-  const handleManualTypeSelection = (type: "article" | "video" | "podcast") => {
+  const handleManualTypeSelection = async (
+    type: "article" | "video" | "podcast",
+  ) => {
     if (uploadedFile) {
       setContentType(type);
       setError(null);
       simulateUpload();
 
-      setTimeout(() => {
+      try {
+        // Upload file to Supabase storage
+        const { filePath, publicUrl } = await uploadContentFile(
+          uploadedFile,
+          type,
+        );
+
+        // Get current user
+        const { data: userData } = await supabase.auth.getUser();
+        const userId = userData.user?.id;
+
+        // Save content metadata to database
+        await saveContentItem({
+          title: uploadedFile.name,
+          contentType: type,
+          filePath,
+          previewUrl: publicUrl,
+          targetType: type === "article" ? targetType : null,
+          user_id: userId || null,
+        });
+
+        // Notify parent component
         onContentUploaded({
           type: type,
           file: uploadedFile,
+          preview: publicUrl,
           targetType: type === "article" ? targetType : null,
+          title: uploadedFile.name,
         });
-      }, 2000);
+
+        toast({
+          title: "Content uploaded",
+          description: `Your ${type} has been uploaded successfully.`,
+        });
+      } catch (err) {
+        console.error("Error processing file:", err);
+        setError("Failed to upload content. Please try again.");
+        setUploadProgress(0);
+      }
     }
   };
 
@@ -199,10 +276,6 @@ const ContentInputPanel = ({
         setIsProcessingUrl(false);
         return;
       }
-
-      // In a real application, you would make an API call to your backend
-      // to fetch and process the content from the URL
-      // For this demo, we'll simulate the process
 
       // Simulate initial processing
       setUploadProgress(20);
@@ -310,16 +383,38 @@ const ContentInputPanel = ({
           "Unable to detect content type from URL. Please select manually.",
         );
       } else {
-        // Simulate processing delay
-        setTimeout(() => {
+        try {
+          // Get current user
+          const { data: userData } = await supabase.auth.getUser();
+          const userId = userData.user?.id;
+
+          // Save content metadata to database
+          await saveContentItem({
+            title: contentTitle,
+            contentType: detectedType,
+            url: processedUrl,
+            previewUrl: previewImage || processedUrl,
+            targetType: detectedType === "article" ? targetType : null,
+            user_id: userId || null,
+          });
+
+          // Notify parent component
           onContentUploaded({
             type: detectedType,
             file: mockFile,
-            preview: previewImage || processedUrl, // Use the preview image or URL as preview
+            preview: previewImage || processedUrl,
             targetType: detectedType === "article" ? targetType : null,
-            title: contentTitle, // Pass the detected title
+            title: contentTitle,
           });
-        }, 1000);
+
+          toast({
+            title: "Content processed",
+            description: `Your ${detectedType} from URL has been processed successfully.`,
+          });
+        } catch (err) {
+          console.error("Error saving URL content:", err);
+          setError("Failed to save content from URL. Please try again.");
+        }
       }
     } catch (error) {
       setError("Failed to process the URL. Please try again.");
@@ -386,6 +481,10 @@ const ContentInputPanel = ({
                         size="sm"
                         variant="outline"
                         className="text-xs h-8 px-3"
+                        type="button"
+                        onClick={() =>
+                          document.getElementById("file-upload")?.click()
+                        }
                       >
                         Browse Files
                       </Button>
