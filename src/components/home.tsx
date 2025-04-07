@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Plus,
   FileText,
@@ -77,6 +78,15 @@ const Home = () => {
   >({});
   const [loadingNestedTransformations, setLoadingNestedTransformations] =
     useState<Record<string, boolean>>({});
+
+  // Multi-select state
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [selectedItems, setSelectedItems] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [selectedTransformations, setSelectedTransformations] = useState<
+    Record<string, boolean>
+  >({});
 
   // New state for content viewer modal
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -188,29 +198,30 @@ const Home = () => {
     setFilteredContentItems(filtered);
   };
 
+  // Extract fetchContentItems to a separate function for reuse
+  const fetchContentItems = async () => {
+    if (!user) return;
+
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("content_items")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      const items = data || [];
+      setContentItems(items);
+      setFilteredContentItems(items);
+    } catch (error) {
+      console.error("Error fetching content items:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Fetch content items from the database
   useEffect(() => {
-    const fetchContentItems = async () => {
-      if (!user) return;
-
-      setIsLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from("content_items")
-          .select("*")
-          .order("created_at", { ascending: false });
-
-        if (error) throw error;
-        const items = data || [];
-        setContentItems(items);
-        setFilteredContentItems(items);
-      } catch (error) {
-        console.error("Error fetching content items:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
     fetchContentItems();
 
     // Set up real-time subscription for content updates
@@ -235,7 +246,18 @@ const Home = () => {
   }, [user]);
 
   const handleSelectContent = (content: any) => {
-    setSelectedContent(content);
+    if (isMultiSelectMode) {
+      // In multi-select mode, toggle selection instead of setting selected content
+      const newSelectedItems = { ...selectedItems };
+      if (newSelectedItems[content.id]) {
+        delete newSelectedItems[content.id];
+      } else {
+        newSelectedItems[content.id] = true;
+      }
+      setSelectedItems(newSelectedItems);
+    } else {
+      setSelectedContent(content);
+    }
   };
 
   const handleViewContent = (content: any, event: React.MouseEvent) => {
@@ -280,9 +302,29 @@ const Home = () => {
 
         if (error) throw error;
 
+        // Process the data to extract social media posts if applicable
+        const processedData = data?.map((item) => {
+          // If this is a social-posts transformation, try to parse the content
+          if (item.target_format === "social-posts" && item.processed_content) {
+            try {
+              const parsedContent = JSON.parse(item.processed_content);
+              if (Array.isArray(parsedContent)) {
+                // Store the parsed posts in the item
+                return {
+                  ...item,
+                  parsedPosts: parsedContent,
+                };
+              }
+            } catch (e) {
+              console.error("Error parsing social posts JSON:", e);
+            }
+          }
+          return item;
+        });
+
         setTransformedContents((prev) => ({
           ...prev,
-          [contentId]: data || [],
+          [contentId]: processedData || [],
         }));
       } catch (error) {
         console.error("Error fetching transformed content:", error);
@@ -353,19 +395,49 @@ const Home = () => {
   };
 
   const handleSelectTransformedContent = (content: any) => {
-    // Create a content-like object from the transformed content
-    const transformedContentObj = {
-      id: content.content_id, // Use the original content ID
-      title: `${content.target_format.replace(/-/g, " ")} (transformed)`,
-      content_type: content.output_type,
-      content: content.processed_content,
-      transformed_content_id: content.id, // Store the transformed content ID
-      is_transformed: true,
-      target_format: content.target_format,
-      source_content_id: content.source_content_id || content.content_id, // Store the original content ID
-    };
+    if (isMultiSelectMode) {
+      // In multi-select mode, toggle selection instead of setting selected content
+      const newSelectedTransformations = { ...selectedTransformations };
+      if (newSelectedTransformations[content.id]) {
+        delete newSelectedTransformations[content.id];
+      } else {
+        newSelectedTransformations[content.id] = true;
+      }
+      setSelectedTransformations(newSelectedTransformations);
+    } else {
+      // Check if this is a single social media post
+      let processedContent = content.processed_content;
+      let singlePost = null;
 
-    setSelectedContent(transformedContentObj);
+      // If this is a single post from a social media transformation
+      if (content.single_post) {
+        singlePost = content.single_post;
+        // Use the single post content instead of the full processed content
+        processedContent = JSON.stringify([singlePost]);
+      } else if (
+        content.target_format === "social-posts" &&
+        content.parsedPosts
+      ) {
+        // If this is a social-posts transformation with parsed posts
+        processedContent = JSON.stringify(content.parsedPosts);
+      }
+
+      // Create a content-like object from the transformed content
+      const transformedContentObj = {
+        id: content.content_id, // Use the original content ID
+        title: `${content.target_format.replace(/-/g, " ")} (transformed)`,
+        content_type: content.output_type,
+        content: processedContent,
+        transformed_content_id: content.id, // Store the transformed content ID
+        is_transformed: true,
+        target_format: content.target_format,
+        source_content_id: content.source_content_id || content.content_id, // Store the original content ID,
+        single_post: singlePost, // Store the single post if available
+        single_post_index: content.single_post_index, // Store the index of the single post
+      };
+
+      setSelectedContent(transformedContentObj);
+    }
   };
 
   const handleViewTransformedContent = (
@@ -376,7 +448,17 @@ const Home = () => {
 
     // Try to determine if this is a social media post and which platform
     let platform = null;
-    if (
+    let viewContent = content.processed_content || "No content available";
+    let contentTitle = `${content.target_format.replace(/-/g, " ")} (transformed)`;
+    let singlePost = content.single_post || null;
+
+    // Check if this is a single post from a social media transformation
+    if (singlePost) {
+      // Use the single post directly
+      platform = singlePost.platform?.toLowerCase() || null;
+      viewContent = JSON.stringify([singlePost]);
+      contentTitle = `${platform ? platform.charAt(0).toUpperCase() + platform.slice(1) : "Social"} Post (transformed)`;
+    } else if (
       content.target_format === "social-posts" &&
       content.options?.platforms?.length > 0
     ) {
@@ -394,6 +476,13 @@ const Home = () => {
           parsedContent[0].platform
         ) {
           platform = parsedContent[0].platform.toLowerCase();
+          // If we're viewing a single post from a collection, extract it
+          if (
+            content.single_post_index !== undefined &&
+            parsedContent[content.single_post_index]
+          ) {
+            singlePost = parsedContent[content.single_post_index];
+          }
         }
       } catch (e) {
         // Not JSON, check if the content mentions a platform
@@ -413,13 +502,15 @@ const Home = () => {
     }
 
     setViewingContent({
-      title: `${content.target_format.replace(/-/g, " ")} (transformed)`,
-      content: content.processed_content || "No content available",
+      title: contentTitle,
+      content: viewContent,
       type: content.output_type || "article",
       platform: platform,
       isEditing: false,
       transformedContentId: content.id, // Store the transformed content ID directly
       contentId: content.content_id, // Store the original content ID
+      single_post: singlePost, // Store the single post if available
+      single_post_index: content.single_post_index, // Store the index of the single post
     });
     setViewerOpen(true);
   };
@@ -451,6 +542,14 @@ const Home = () => {
         if (deleteJobsError) throw deleteJobsError;
       }
 
+      // Delete any associated content outputs (transformations)
+      const { error: deleteOutputsError } = await supabase
+        .from("content_outputs")
+        .delete()
+        .eq("content_id", contentId);
+
+      if (deleteOutputsError) throw deleteOutputsError;
+
       // Now delete the content item
       const { error: deleteError } = await supabase
         .from("content_items")
@@ -463,12 +562,156 @@ const Home = () => {
       if (selectedContent && selectedContent.id === contentId) {
         setSelectedContent(null);
       }
+
+      // Remove from selected items if it was selected
+      if (selectedItems[contentId]) {
+        const updatedSelectedItems = { ...selectedItems };
+        delete updatedSelectedItems[contentId];
+        setSelectedItems(updatedSelectedItems);
+      }
+
+      toast({
+        title: "Content deleted",
+        description: "Content and all its transformations have been deleted.",
+      });
     } catch (error) {
       console.error("Error deleting content:", error);
       setDeleteError("Failed to delete content. Please try again.");
     } finally {
       setIsDeleting(false);
     }
+  };
+
+  const handleDeleteSelected = async () => {
+    if (
+      Object.keys(selectedItems).length === 0 &&
+      Object.keys(selectedTransformations).length === 0
+    ) {
+      toast({
+        title: "No items selected",
+        description: "Please select at least one item to delete.",
+      });
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    let hasError = false;
+    let deletedContentCount = 0;
+    let deletedTransformationCount = 0;
+
+    // Delete selected content items
+    if (Object.keys(selectedItems).length > 0) {
+      // First check if there are any processing jobs associated with these content items
+      const contentIds = Object.keys(selectedItems);
+
+      try {
+        // Delete any associated processing jobs first
+        const { error: deleteJobsError } = await supabase
+          .from("processing_jobs")
+          .delete()
+          .in("content_id", contentIds);
+
+        if (deleteJobsError) {
+          console.error("Error deleting processing jobs:", deleteJobsError);
+          hasError = true;
+        }
+
+        // Delete any associated content outputs
+        const { error: deleteOutputsError } = await supabase
+          .from("content_outputs")
+          .delete()
+          .in("content_id", contentIds);
+
+        if (deleteOutputsError) {
+          console.error("Error deleting content outputs:", deleteOutputsError);
+          hasError = true;
+        }
+
+        // Now delete the content items
+        const { error: deleteContentError } = await supabase
+          .from("content_items")
+          .delete()
+          .in("id", contentIds);
+
+        if (deleteContentError) {
+          console.error("Error deleting content items:", deleteContentError);
+          hasError = true;
+        } else {
+          deletedContentCount = contentIds.length;
+        }
+
+        // If the deleted item was selected, clear the selection
+        if (selectedContent && selectedItems[selectedContent.id]) {
+          setSelectedContent(null);
+        }
+      } catch (error) {
+        console.error("Error in content deletion:", error);
+        hasError = true;
+      }
+    }
+
+    // Delete selected transformations
+    if (Object.keys(selectedTransformations).length > 0) {
+      const transformationIds = Object.keys(selectedTransformations);
+
+      try {
+        // Delete the transformations
+        const { error: deleteTransformationsError } = await supabase
+          .from("content_outputs")
+          .delete()
+          .in("id", transformationIds);
+
+        if (deleteTransformationsError) {
+          console.error(
+            "Error deleting transformations:",
+            deleteTransformationsError,
+          );
+          hasError = true;
+        } else {
+          deletedTransformationCount = transformationIds.length;
+        }
+
+        // If the deleted transformation was selected, clear the selection
+        if (
+          selectedContent &&
+          selectedContent.transformed_content_id &&
+          selectedTransformations[selectedContent.transformed_content_id]
+        ) {
+          setSelectedContent(null);
+        }
+      } catch (error) {
+        console.error("Error in transformation deletion:", error);
+        hasError = true;
+      }
+    }
+
+    // Clear selections regardless of errors
+    setSelectedItems({});
+    setSelectedTransformations({});
+
+    // Clear transformed content cache to force re-fetch
+    setTransformedContents({});
+    setNestedTransformations({});
+
+    // Always refresh the content to show updated state
+    await fetchContentItems();
+
+    if (hasError) {
+      setDeleteError(
+        "Some items could not be deleted. The list has been refreshed with current data.",
+      );
+    } else {
+      toast({
+        title: "Items deleted",
+        description: `Successfully deleted ${deletedContentCount} content items and ${deletedTransformationCount} transformations.`,
+      });
+      // Exit multi-select mode only on success
+      setIsMultiSelectMode(false);
+    }
+
+    setIsDeleting(false);
   };
 
   const getContentTypeIcon = (type: string) => {
@@ -503,15 +746,67 @@ const Home = () => {
     try {
       // Check if we're editing a transformed content or original content
       if (viewingContent.transformedContentId) {
-        // Update transformed content in the database
-        const { error } = await supabase
-          .from("content_outputs")
-          .update({
-            processed_content: viewingContent.content,
-          })
-          .eq("id", viewingContent.transformedContentId);
+        // Handle differently if it's a single post from a collection
+        if (
+          viewingContent.single_post &&
+          viewingContent.single_post_index !== undefined
+        ) {
+          // Get the current content first
+          const { data, error: fetchError } = await supabase
+            .from("content_outputs")
+            .select("processed_content")
+            .eq("id", viewingContent.transformedContentId)
+            .single();
 
-        if (error) throw error;
+          if (fetchError) throw fetchError;
+
+          // Parse the content, update the specific post, and save it back
+          try {
+            const allPosts = JSON.parse(data.processed_content);
+            if (
+              Array.isArray(allPosts) &&
+              allPosts[viewingContent.single_post_index]
+            ) {
+              // If editing a single post, update just that post's content
+              if (viewingContent.single_post) {
+                try {
+                  // Try to parse the edited content as a single post
+                  const editedPost = JSON.parse(viewingContent.content)[0];
+                  allPosts[viewingContent.single_post_index] = editedPost;
+                } catch (e) {
+                  // If parsing fails, just update the content directly
+                  allPosts[viewingContent.single_post_index].content =
+                    viewingContent.content;
+                }
+              }
+
+              // Update the database with the modified collection
+              const { error } = await supabase
+                .from("content_outputs")
+                .update({
+                  processed_content: JSON.stringify(allPosts),
+                })
+                .eq("id", viewingContent.transformedContentId);
+
+              if (error) throw error;
+            }
+          } catch (e) {
+            console.error("Error updating single post in collection:", e);
+            throw new Error(
+              "Failed to update the post. The content may not be in the expected format.",
+            );
+          }
+        } else {
+          // Regular update for transformed content
+          const { error } = await supabase
+            .from("content_outputs")
+            .update({
+              processed_content: viewingContent.content,
+            })
+            .eq("id", viewingContent.transformedContentId);
+
+          if (error) throw error;
+        }
 
         // Update the transformed content in state if it exists in our local state
         if (viewingContent.contentId) {
@@ -643,9 +938,72 @@ const Home = () => {
           {/* Content Library Table - Moved to top */}
           <Card className="bg-white shadow-sm">
             <CardHeader className="pb-3 pt-5 px-6 flex flex-row items-center justify-between">
-              <CardTitle className="text-lg font-semibold">
-                Content Library
-              </CardTitle>
+              <div className="flex items-center gap-4">
+                <CardTitle className="text-lg font-semibold">
+                  Content Library
+                </CardTitle>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setIsMultiSelectMode(!isMultiSelectMode);
+                    // Clear selections when exiting multi-select mode
+                    if (isMultiSelectMode) {
+                      setSelectedItems({});
+                      setSelectedTransformations({});
+                    }
+                  }}
+                  className="text-xs"
+                >
+                  {isMultiSelectMode ? "Cancel Selection" : "Multi-Select"}
+                </Button>
+                {isMultiSelectMode &&
+                  Object.keys(selectedItems).length +
+                    Object.keys(selectedTransformations).length >
+                    0 && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleDeleteSelected}
+                      disabled={isDeleting}
+                      className="text-xs flex items-center gap-1"
+                    >
+                      {isDeleting ? (
+                        <>
+                          <svg
+                            className="animate-spin h-3 w-3 text-white"
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                          >
+                            <circle
+                              className="opacity-25"
+                              cx="12"
+                              cy="12"
+                              r="10"
+                              stroke="currentColor"
+                              strokeWidth="4"
+                            ></circle>
+                            <path
+                              className="opacity-75"
+                              fill="currentColor"
+                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                            ></path>
+                          </svg>
+                          Deleting...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="h-3 w-3" />
+                          Delete Selected (
+                          {Object.keys(selectedItems).length +
+                            Object.keys(selectedTransformations).length}
+                          )
+                        </>
+                      )}
+                    </Button>
+                  )}
+              </div>
               <div className="relative w-64">
                 <Input
                   type="text"
@@ -695,6 +1053,9 @@ const Home = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        {isMultiSelectMode && (
+                          <TableHead className="w-[50px]">Select</TableHead>
+                        )}
                         <TableHead>Title</TableHead>
                         <TableHead>Type</TableHead>
                         <TableHead>Origin</TableHead>
@@ -706,9 +1067,28 @@ const Home = () => {
                       {filteredContentItems.map((item) => (
                         <React.Fragment key={item.id}>
                           <TableRow
-                            className={`cursor-pointer ${selectedContent && selectedContent.id === item.id && !selectedContent.transformed_content_id ? "bg-muted/50" : ""}`}
+                            className={`cursor-pointer ${selectedContent && selectedContent.id === item.id && !selectedContent.transformed_content_id ? "bg-muted/50" : ""} ${selectedItems[item.id] ? "bg-muted/50" : ""}`}
                             onClick={() => handleSelectContent(item)}
                           >
+                            {isMultiSelectMode && (
+                              <TableCell className="w-[50px]">
+                                <Checkbox
+                                  checked={!!selectedItems[item.id]}
+                                  onCheckedChange={(checked) => {
+                                    const newSelectedItems = {
+                                      ...selectedItems,
+                                    };
+                                    if (checked) {
+                                      newSelectedItems[item.id] = true;
+                                    } else {
+                                      delete newSelectedItems[item.id];
+                                    }
+                                    setSelectedItems(newSelectedItems);
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </TableCell>
+                            )}
                             <TableCell className="font-medium truncate max-w-[150px]">
                               <div className="flex items-center gap-2">
                                 <Button
@@ -781,7 +1161,10 @@ const Home = () => {
                           {/* Expanded transformed content rows */}
                           {expandedItems[item.id] && (
                             <TableRow>
-                              <TableCell colSpan={5} className="p-0 border-t-0">
+                              <TableCell
+                                colSpan={isMultiSelectMode ? 6 : 5}
+                                className="p-0 border-t-0"
+                              >
                                 <div className="bg-muted/20 px-4 py-2">
                                   {loadingTransformedContent[item.id] ? (
                                     <div className="flex justify-center py-2">
@@ -818,7 +1201,7 @@ const Home = () => {
                                             key={transformedItem.id}
                                           >
                                             <div
-                                              className={`flex items-center justify-between p-2 rounded-md hover:bg-muted cursor-pointer ${selectedContent?.transformed_content_id === transformedItem.id ? "bg-muted" : ""}`}
+                                              className={`flex items-center justify-between p-2 rounded-md hover:bg-muted cursor-pointer ${selectedContent?.transformed_content_id === transformedItem.id ? "bg-muted" : ""} ${selectedTransformations[transformedItem.id] ? "bg-muted" : ""}`}
                                               onClick={(e) => {
                                                 e.stopPropagation();
                                                 handleSelectTransformedContent(
@@ -827,6 +1210,39 @@ const Home = () => {
                                               }}
                                             >
                                               <div className="flex items-center gap-2">
+                                                {isMultiSelectMode && (
+                                                  <Checkbox
+                                                    checked={
+                                                      !!selectedTransformations[
+                                                        transformedItem.id
+                                                      ]
+                                                    }
+                                                    onCheckedChange={(
+                                                      checked,
+                                                    ) => {
+                                                      const newSelectedTransformations =
+                                                        {
+                                                          ...selectedTransformations,
+                                                        };
+                                                      if (checked) {
+                                                        newSelectedTransformations[
+                                                          transformedItem.id
+                                                        ] = true;
+                                                      } else {
+                                                        delete newSelectedTransformations[
+                                                          transformedItem.id
+                                                        ];
+                                                      }
+                                                      setSelectedTransformations(
+                                                        newSelectedTransformations,
+                                                      );
+                                                    }}
+                                                    onClick={(e) =>
+                                                      e.stopPropagation()
+                                                    }
+                                                    className="mr-1"
+                                                  />
+                                                )}
                                                 <Button
                                                   variant="ghost"
                                                   size="sm"
@@ -843,6 +1259,10 @@ const Home = () => {
                                                     ]
                                                       ? "Collapse"
                                                       : "Expand"
+                                                  }
+                                                  disabled={
+                                                    transformedItem.target_format !==
+                                                    "social-posts"
                                                   }
                                                 >
                                                   {expandedTransformations[
@@ -897,7 +1317,7 @@ const Home = () => {
                                               </div>
                                             </div>
 
-                                            {/* Nested transformations */}
+                                            {/* Social Media Posts or Nested transformations */}
                                             {expandedTransformations[
                                               transformedItem.id
                                             ] && (
@@ -927,6 +1347,94 @@ const Home = () => {
                                                       ></path>
                                                     </svg>
                                                   </div>
+                                                ) : transformedItem.target_format ===
+                                                    "social-posts" &&
+                                                  transformedItem.parsedPosts ? (
+                                                  <div className="space-y-1 py-1">
+                                                    <p className="text-xs font-medium mb-1 text-muted-foreground">
+                                                      Social Media Posts:
+                                                    </p>
+                                                    {transformedItem.parsedPosts.map(
+                                                      (post, index) => (
+                                                        <div
+                                                          key={`${transformedItem.id}-post-${index}`}
+                                                          className="flex items-center justify-between p-1.5 rounded-md hover:bg-muted/70 cursor-pointer text-sm"
+                                                          onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            // Create a modified version of the transformed item with just this post
+                                                            const singlePostItem =
+                                                              {
+                                                                ...transformedItem,
+                                                                processed_content:
+                                                                  JSON.stringify(
+                                                                    [post],
+                                                                  ),
+                                                                single_post:
+                                                                  post,
+                                                                single_post_index:
+                                                                  index,
+                                                              };
+                                                            handleViewTransformedContent(
+                                                              singlePostItem,
+                                                              e,
+                                                            );
+                                                          }}
+                                                        >
+                                                          <div className="flex items-center gap-2">
+                                                            <Badge
+                                                              variant="outline"
+                                                              className="capitalize text-xs"
+                                                            >
+                                                              {post.platform ||
+                                                                "Unknown"}
+                                                            </Badge>
+                                                            <span className="text-xs truncate max-w-[200px]">
+                                                              {post.content
+                                                                ? post.content.substring(
+                                                                    0,
+                                                                    50,
+                                                                  ) +
+                                                                  (post.content
+                                                                    .length > 50
+                                                                    ? "..."
+                                                                    : "")
+                                                                : "No content"}
+                                                            </span>
+                                                          </div>
+                                                          <div className="flex items-center gap-1">
+                                                            <Button
+                                                              variant="ghost"
+                                                              size="sm"
+                                                              className="h-6 w-6 p-0"
+                                                              onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                // Create a modified version of the transformed item with just this post
+                                                                const singlePostItem =
+                                                                  {
+                                                                    ...transformedItem,
+                                                                    processed_content:
+                                                                      JSON.stringify(
+                                                                        [post],
+                                                                      ),
+                                                                    single_post:
+                                                                      post,
+                                                                    single_post_index:
+                                                                      index,
+                                                                  };
+                                                                handleViewTransformedContent(
+                                                                  singlePostItem,
+                                                                  e,
+                                                                );
+                                                              }}
+                                                              title="View post"
+                                                            >
+                                                              <Eye className="h-3 w-3" />
+                                                            </Button>
+                                                          </div>
+                                                        </div>
+                                                      ),
+                                                    )}
+                                                  </div>
                                                 ) : nestedTransformations[
                                                     transformedItem.id
                                                   ]?.length > 0 ? (
@@ -939,7 +1447,7 @@ const Home = () => {
                                                     ].map((nestedItem) => (
                                                       <div
                                                         key={nestedItem.id}
-                                                        className={`flex items-center justify-between p-1.5 rounded-md hover:bg-muted/70 cursor-pointer text-sm ${selectedContent?.transformed_content_id === nestedItem.id ? "bg-muted/70" : ""}`}
+                                                        className={`flex items-center justify-between p-1.5 rounded-md hover:bg-muted/70 cursor-pointer text-sm ${selectedContent?.transformed_content_id === nestedItem.id ? "bg-muted/70" : ""} ${selectedTransformations[nestedItem.id] ? "bg-muted/70" : ""}`}
                                                         onClick={(e) => {
                                                           e.stopPropagation();
                                                           handleSelectTransformedContent(
@@ -948,6 +1456,40 @@ const Home = () => {
                                                         }}
                                                       >
                                                         <div className="flex items-center gap-2">
+                                                          {isMultiSelectMode && (
+                                                            <Checkbox
+                                                              checked={
+                                                                !!selectedTransformations[
+                                                                  nestedItem.id
+                                                                ]
+                                                              }
+                                                              onCheckedChange={(
+                                                                checked,
+                                                              ) => {
+                                                                const newSelectedTransformations =
+                                                                  {
+                                                                    ...selectedTransformations,
+                                                                  };
+                                                                if (checked) {
+                                                                  newSelectedTransformations[
+                                                                    nestedItem.id
+                                                                  ] = true;
+                                                                } else {
+                                                                  delete newSelectedTransformations[
+                                                                    nestedItem
+                                                                      .id
+                                                                  ];
+                                                                }
+                                                                setSelectedTransformations(
+                                                                  newSelectedTransformations,
+                                                                );
+                                                              }}
+                                                              onClick={(e) =>
+                                                                e.stopPropagation()
+                                                              }
+                                                              className="mr-1"
+                                                            />
+                                                          )}
                                                           <Badge
                                                             variant="outline"
                                                             className="capitalize text-xs"
@@ -998,8 +1540,10 @@ const Home = () => {
                                                   </div>
                                                 ) : (
                                                   <p className="text-xs text-muted-foreground py-1.5 pl-2">
-                                                    No further transformations
-                                                    available
+                                                    {transformedItem.target_format ===
+                                                    "social-posts"
+                                                      ? "No social media posts found"
+                                                      : "No further transformations available"}
                                                   </p>
                                                 )}
                                               </div>
@@ -1160,6 +1704,204 @@ const Home = () => {
                         <br key={index} />
                       ),
                     )}
+                </div>
+              ) : viewingContent?.platform && viewingContent?.single_post ? (
+                <div className="flex justify-center w-full">
+                  {/* Single Social Media Post Preview */}
+                  {viewingContent.platform === "twitter" && (
+                    <div className="w-full max-w-md bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                      <div className="flex items-start mb-3">
+                        <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center mr-3">
+                          <img
+                            src="https://api.dicebear.com/7.x/avataaars/svg?seed=twitter"
+                            alt="Profile"
+                            className="h-10 w-10 rounded-full"
+                          />
+                        </div>
+                        <div>
+                          <div className="font-bold">Twitter User</div>
+                          <div className="text-gray-500 text-sm">
+                            @twitteruser
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mb-3 text-[15px]">
+                        {viewingContent.single_post.content}
+                      </div>
+                      <div className="text-gray-500 text-sm">
+                        12:45 PM · Jun 12, 2023
+                      </div>
+                      <div className="flex justify-between mt-3 text-gray-500 border-t border-gray-100 pt-3">
+                        <div>💬 24</div>
+                        <div>🔄 142</div>
+                        <div>❤️ 892</div>
+                        <div>📤</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {viewingContent.platform === "facebook" && (
+                    <div className="w-full max-w-md bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+                      <div className="flex items-center mb-3">
+                        <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center mr-3">
+                          <img
+                            src="https://api.dicebear.com/7.x/avataaars/svg?seed=facebook"
+                            alt="Profile"
+                            className="h-10 w-10 rounded-full"
+                          />
+                        </div>
+                        <div>
+                          <div className="font-bold">Facebook User</div>
+                          <div className="text-gray-500 text-xs">
+                            2 hrs · 🌎
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mb-3">
+                        {viewingContent.single_post.content}
+                      </div>
+                      <div className="flex justify-between mt-3 text-gray-500 border-t border-gray-100 pt-3">
+                        <div>👍 Like</div>
+                        <div>💬 Comment</div>
+                        <div>↗️ Share</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {viewingContent.platform === "instagram" && (
+                    <div className="w-full max-w-md bg-white rounded-lg border border-gray-200 shadow-sm">
+                      <div className="flex items-center p-3 border-b">
+                        <div className="h-8 w-8 rounded-full bg-gradient-to-r from-pink-500 to-orange-400 p-0.5 mr-3">
+                          <img
+                            src="https://api.dicebear.com/7.x/avataaars/svg?seed=instagram"
+                            alt="Profile"
+                            className="h-7 w-7 rounded-full bg-white"
+                          />
+                        </div>
+                        <div className="font-semibold">instagram_user</div>
+                      </div>
+                      <div className="aspect-square bg-gray-100 flex items-center justify-center">
+                        <div className="text-center p-6 text-gray-500">
+                          <div className="text-sm mb-2">
+                            Image would appear here
+                          </div>
+                          <div className="text-xs">
+                            Instagram posts typically include an image
+                          </div>
+                        </div>
+                      </div>
+                      <div className="p-3">
+                        <div className="flex space-x-4 mb-2">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            strokeWidth={1.5}
+                            stroke="currentColor"
+                            className="w-6 h-6"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12Z"
+                            />
+                          </svg>
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            strokeWidth={1.5}
+                            stroke="currentColor"
+                            className="w-6 h-6"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 0 1-.923 1.785A5.969 5.969 0 0 0 6 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337Z"
+                            />
+                          </svg>
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            strokeWidth={1.5}
+                            stroke="currentColor"
+                            className="w-6 h-6"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5"
+                            />
+                          </svg>
+                        </div>
+                        <div className="font-bold mb-1">1,234 likes</div>
+                        <div>
+                          <span className="font-semibold mr-1">
+                            instagram_user
+                          </span>
+                          <span>{viewingContent.single_post.content}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {viewingContent.platform === "linkedin" && (
+                    <div className="w-full max-w-md bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+                      <div className="flex items-start mb-3">
+                        <div className="h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center mr-3">
+                          <img
+                            src="https://api.dicebear.com/7.x/avataaars/svg?seed=linkedin"
+                            alt="Profile"
+                            className="h-12 w-12 rounded-full"
+                          />
+                        </div>
+                        <div>
+                          <div className="font-bold">LinkedIn Professional</div>
+                          <div className="text-gray-500 text-xs">
+                            Marketing Director at Company Inc.
+                          </div>
+                          <div className="text-gray-500 text-xs">2d · 🌎</div>
+                        </div>
+                      </div>
+                      <div className="mb-3 whitespace-pre-line">
+                        {viewingContent.single_post.content}
+                      </div>
+                      <div className="flex justify-between mt-3 text-gray-500 border-t border-gray-100 pt-3">
+                        <div>👍 Like</div>
+                        <div>💬 Comment</div>
+                        <div>↗️ Share</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Default social post if platform not specifically handled */}
+                  {!["twitter", "facebook", "instagram", "linkedin"].includes(
+                    viewingContent.platform,
+                  ) && (
+                    <div className="w-full max-w-md bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+                      <div className="flex items-center mb-3">
+                        <div className="h-10 w-10 rounded-full bg-gray-100 flex items-center justify-center mr-3">
+                          <img
+                            src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${viewingContent.platform || "social"}`}
+                            alt="Profile"
+                            className="h-10 w-10 rounded-full"
+                          />
+                        </div>
+                        <div>
+                          <div className="font-bold capitalize">
+                            {viewingContent.platform || "Social"} User
+                          </div>
+                          <div className="text-gray-500 text-xs">
+                            Posted recently
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mb-3">
+                        {viewingContent.single_post.content}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : viewingContent?.platform ? (
                 <div className="flex justify-center w-full">
