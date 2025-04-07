@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Card,
@@ -19,7 +19,25 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Download, Share2, Edit, Copy, Check } from "lucide-react";
+import {
+  Download,
+  Share2,
+  Edit,
+  Copy,
+  Check,
+  History,
+  FileText,
+  Video,
+  Mic,
+} from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
+import { supabase } from "@/services/supabase";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
 interface OutputPreviewProps {
   originalContent?: {
@@ -37,6 +55,19 @@ interface OutputPreviewProps {
     mediaType?: "audio" | "video";
   }[];
   processingResult?: any;
+  contentId?: string;
+  contentType?: string;
+  targetFormat?: string;
+}
+
+interface ContentOutput {
+  id: string;
+  content_id: string;
+  output_type: string;
+  target_format: string;
+  processed_content: string;
+  created_at: string;
+  options: any;
 }
 
 const OutputPreview = ({
@@ -88,7 +119,19 @@ const OutputPreview = ({
     },
   ],
   processingResult,
+  contentId,
+  contentType = "article",
+  targetFormat = "social-posts",
 }: OutputPreviewProps) => {
+  const { toast } = useToast();
+  const [copied, setCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState("preview");
+  const [previousOutputs, setPreviousOutputs] = useState<ContentOutput[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [selectedOutput, setSelectedOutput] = useState<string | null>(
+    processingResult,
+  );
+
   // Process the result from OpenAI if available
   const repurposedContent = React.useMemo(() => {
     if (!processingResult) return initialRepurposedContent;
@@ -198,6 +241,7 @@ const OutputPreview = ({
 
     return initialRepurposedContent;
   }, [processingResult, initialRepurposedContent]);
+
   const [selectedTemplate, setSelectedTemplate] = useState("default");
   const [activeRepurposedContent, setActiveRepurposedContent] = useState(
     repurposedContent[0],
@@ -206,7 +250,36 @@ const OutputPreview = ({
   const [editedContent, setEditedContent] = useState(
     activeRepurposedContent?.content || "",
   );
-  const [copied, setCopied] = useState(false);
+
+  // Fetch previous outputs for this content
+  useEffect(() => {
+    if (contentId) {
+      fetchPreviousOutputs(contentId);
+    }
+  }, [contentId, processingResult]);
+
+  // Reset selected output when processing result changes
+  useEffect(() => {
+    setSelectedOutput(processingResult);
+  }, [processingResult]);
+
+  const fetchPreviousOutputs = async (contentId: string) => {
+    setIsLoadingHistory(true);
+    try {
+      const { data, error } = await supabase
+        .from("content_outputs")
+        .select("*")
+        .eq("content_id", contentId)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setPreviousOutputs(data || []);
+    } catch (error) {
+      console.error("Error fetching previous outputs:", error);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
 
   const handleTemplateChange = (value: string) => {
     setSelectedTemplate(value);
@@ -232,9 +305,35 @@ const OutputPreview = ({
   };
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(activeRepurposedContent?.content || "");
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (selectedOutput) {
+      navigator.clipboard.writeText(selectedOutput);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast({
+        title: "Copied to clipboard",
+        description: "The processed content has been copied to your clipboard.",
+      });
+    }
+  };
+
+  const handleDownload = () => {
+    if (selectedOutput) {
+      const blob = new Blob([selectedOutput], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `processed-content-${new Date().toISOString().slice(0, 10)}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "Content downloaded",
+        description:
+          "The processed content has been downloaded as a text file.",
+      });
+    }
   };
 
   const getPlatformColor = (platform?: string) => {
@@ -253,6 +352,28 @@ const OutputPreview = ({
         return "bg-gray-500";
     }
   };
+
+  const getContentTypeIcon = (type = contentType) => {
+    switch (type) {
+      case "article":
+        return <FileText className="h-5 w-5 text-blue-500" />;
+      case "video":
+        return <Video className="h-5 w-5 text-red-500" />;
+      case "podcast":
+        return <Mic className="h-5 w-5 text-purple-500" />;
+      default:
+        return <FileText className="h-5 w-5 text-muted-foreground" />;
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleString();
+  };
+
+  if (!processingResult && previousOutputs.length === 0) {
+    return null;
+  }
 
   return (
     <div className="w-full bg-background p-6 rounded-lg">
@@ -315,209 +436,216 @@ const OutputPreview = ({
                 </SelectContent>
               </Select>
             </div>
-            <Tabs defaultValue={repurposedContent[0].type} className="w-full">
-              <TabsList className="grid grid-cols-5 w-full">
-                <TabsTrigger value="social">Social</TabsTrigger>
-                <TabsTrigger value="newsletter">Newsletter</TabsTrigger>
-                <TabsTrigger value="blog">Blog</TabsTrigger>
-                <TabsTrigger value="audio">Audio</TabsTrigger>
-                <TabsTrigger value="video">Video</TabsTrigger>
+            <Tabs defaultValue="preview" className="w-full">
+              <TabsList className="grid grid-cols-3 w-full">
+                <TabsTrigger value="preview">Preview</TabsTrigger>
+                <TabsTrigger value="history">History</TabsTrigger>
+                <TabsTrigger value="export">Export</TabsTrigger>
               </TabsList>
 
-              <TabsContent value="social" className="mt-4 space-y-4">
-                <div className="flex flex-wrap gap-2">
-                  {repurposedContent
-                    .filter((content) => content.type === "social")
-                    .map((content, index) => (
-                      <Badge
-                        key={index}
-                        variant={
-                          activeRepurposedContent === content
-                            ? "default"
-                            : "outline"
-                        }
-                        className="cursor-pointer"
-                        onClick={() => handleContentSelect(content)}
-                      >
-                        {content.title}
-                      </Badge>
-                    ))}
+              <TabsContent value="preview" className="mt-4 space-y-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="flex items-center gap-1.5">
+                    {getContentTypeIcon()}
+                    <span className="text-sm font-medium capitalize">
+                      {contentType}
+                    </span>
+                  </div>
+                  <span className="text-muted-foreground">→</span>
+                  <Badge variant="outline" className="capitalize">
+                    {targetFormat?.replace("-", " ") || "custom"}
+                  </Badge>
                 </div>
-                {activeRepurposedContent &&
-                  activeRepurposedContent.type === "social" && (
-                    <div className="p-4 border rounded-md">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-medium">
-                          {activeRepurposedContent.title}
-                        </h3>
-                        <Badge
-                          className={`${getPlatformColor(activeRepurposedContent.platform)} text-white`}
-                        >
-                          {activeRepurposedContent.platform}
-                        </Badge>
-                      </div>
-                      {isEditing ? (
-                        <Textarea
-                          value={editedContent}
-                          onChange={(e) => setEditedContent(e.target.value)}
-                          className="min-h-[120px]"
-                        />
-                      ) : (
-                        <p className="text-sm">
-                          {activeRepurposedContent.content}
-                        </p>
-                      )}
-                    </div>
-                  )}
-              </TabsContent>
 
-              <TabsContent value="newsletter" className="mt-4 space-y-4">
-                <div className="flex flex-wrap gap-2">
-                  {repurposedContent
-                    .filter((content) => content.type === "newsletter")
-                    .map((content, index) => (
-                      <Badge
-                        key={index}
-                        variant={
-                          activeRepurposedContent === content
-                            ? "default"
-                            : "outline"
-                        }
-                        className="cursor-pointer"
-                        onClick={() => handleContentSelect(content)}
-                      >
-                        {content.title}
-                      </Badge>
-                    ))}
+                <div className="p-4 border rounded-md bg-muted/20 min-h-[200px] max-h-[500px] overflow-y-auto">
+                  <pre className="text-sm whitespace-pre-wrap">
+                    {typeof selectedOutput === "string"
+                      ? selectedOutput
+                      : JSON.stringify(selectedOutput, null, 2)}
+                  </pre>
                 </div>
-                {activeRepurposedContent &&
-                  activeRepurposedContent.type === "newsletter" && (
-                    <div className="p-4 border rounded-md">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-medium">
-                          {activeRepurposedContent.title}
-                        </h3>
-                        <Badge
-                          className={`${getPlatformColor(activeRepurposedContent.platform)} text-white`}
-                        >
-                          {activeRepurposedContent.platform || "Email"}
-                        </Badge>
-                      </div>
-                      {isEditing ? (
-                        <Textarea
-                          value={editedContent}
-                          onChange={(e) => setEditedContent(e.target.value)}
-                          className="min-h-[120px]"
-                        />
-                      ) : (
-                        <p className="text-sm">
-                          {activeRepurposedContent.content}
-                        </p>
-                      )}
-                    </div>
-                  )}
-              </TabsContent>
 
-              <TabsContent value="blog" className="mt-4">
-                <div className="p-4 border rounded-md flex items-center justify-center h-[200px] text-muted-foreground">
-                  No blog content generated yet
+                <div className="flex justify-end gap-2 mt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex items-center gap-1.5"
+                    onClick={handleCopy}
+                  >
+                    {copied ? (
+                      <Check className="h-4 w-4" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex items-center gap-1.5"
+                    onClick={handleDownload}
+                  >
+                    <Download className="h-4 w-4" />
+                    Download
+                  </Button>
                 </div>
               </TabsContent>
 
-              <TabsContent value="audio" className="mt-4 space-y-4">
-                <div className="flex flex-wrap gap-2">
-                  {repurposedContent
-                    .filter((content) => content.type === "audio")
-                    .map((content, index) => (
-                      <Badge
-                        key={index}
-                        variant={
-                          activeRepurposedContent === content
-                            ? "default"
-                            : "outline"
-                        }
-                        className="cursor-pointer"
-                        onClick={() => handleContentSelect(content)}
-                      >
-                        {content.title}
-                      </Badge>
+              <TabsContent value="history" className="mt-4 space-y-4">
+                {isLoadingHistory ? (
+                  <div className="flex justify-center py-8">
+                    <svg
+                      className="animate-spin h-6 w-6 text-primary"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                  </div>
+                ) : previousOutputs.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <History className="h-12 w-12 mx-auto mb-3 opacity-20" />
+                    <p>No previous transformations found</p>
+                  </div>
+                ) : (
+                  <Accordion type="single" collapsible className="w-full">
+                    {previousOutputs.map((output) => (
+                      <AccordionItem key={output.id} value={output.id}>
+                        <AccordionTrigger className="hover:bg-muted/50 px-3 rounded-md">
+                          <div className="flex items-center gap-3 text-left">
+                            <div className="flex items-center gap-1.5">
+                              {getContentTypeIcon(output.output_type)}
+                              <span className="text-sm font-medium capitalize">
+                                {output.output_type}
+                              </span>
+                            </div>
+                            <span className="text-muted-foreground">→</span>
+                            <Badge variant="outline" className="capitalize">
+                              {output.target_format.replace("-", " ")}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground ml-auto">
+                              {formatDate(output.created_at)}
+                            </span>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent>
+                          <div className="p-3 border rounded-md bg-muted/10 mt-2 mb-3 max-h-[300px] overflow-y-auto">
+                            <pre className="text-sm whitespace-pre-wrap">
+                              {typeof output.processed_content === "string"
+                                ? output.processed_content
+                                : JSON.stringify(
+                                    output.processed_content,
+                                    null,
+                                    2,
+                                  )}
+                            </pre>
+                          </div>
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedOutput(output.processed_content);
+                                setActiveTab("preview");
+                                toast({
+                                  title: "Output selected",
+                                  description:
+                                    "Previous output loaded in preview tab",
+                                });
+                              }}
+                            >
+                              View in Preview
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                navigator.clipboard.writeText(
+                                  output.processed_content,
+                                );
+                                toast({
+                                  title: "Copied to clipboard",
+                                  description:
+                                    "The processed content has been copied to your clipboard.",
+                                });
+                              }}
+                            >
+                              <Copy className="h-4 w-4 mr-1.5" /> Copy
+                            </Button>
+                          </div>
+                        </AccordionContent>
+                      </AccordionItem>
                     ))}
-                </div>
-                {activeRepurposedContent &&
-                  activeRepurposedContent.type === "audio" && (
-                    <div className="p-4 border rounded-md">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-medium">
-                          {activeRepurposedContent.title}
-                        </h3>
-                        <Badge className="bg-purple-600 text-white">
-                          Audio Podcast
-                        </Badge>
-                      </div>
-                      <p className="text-sm mb-4">
-                        {activeRepurposedContent.content}
-                      </p>
-                      {activeRepurposedContent.mediaUrl && (
-                        <div className="mt-2">
-                          <audio
-                            controls
-                            className="w-full"
-                            src={activeRepurposedContent.mediaUrl}
-                          >
-                            Your browser does not support the audio element.
-                          </audio>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  </Accordion>
+                )}
               </TabsContent>
 
-              <TabsContent value="video" className="mt-4 space-y-4">
-                <div className="flex flex-wrap gap-2">
-                  {repurposedContent
-                    .filter((content) => content.type === "video")
-                    .map((content, index) => (
-                      <Badge
-                        key={index}
-                        variant={
-                          activeRepurposedContent === content
-                            ? "default"
-                            : "outline"
-                        }
-                        className="cursor-pointer"
-                        onClick={() => handleContentSelect(content)}
+              <TabsContent value="export" className="mt-4 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Card className="cursor-pointer hover:border-primary transition-colors">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">
+                        Download as Text
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="text-sm text-muted-foreground">
+                      Download the processed content as a plain text file
+                    </CardContent>
+                    <CardFooter>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={handleDownload}
                       >
-                        {content.title}
-                      </Badge>
-                    ))}
+                        <Download className="h-4 w-4 mr-2" /> Download .txt
+                      </Button>
+                    </CardFooter>
+                  </Card>
+
+                  <Card className="cursor-pointer hover:border-primary transition-colors">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">
+                        Copy to Clipboard
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="text-sm text-muted-foreground">
+                      Copy the processed content to your clipboard for easy
+                      pasting
+                    </CardContent>
+                    <CardFooter>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={handleCopy}
+                      >
+                        {copied ? (
+                          <>
+                            <Check className="h-4 w-4 mr-2" /> Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-4 w-4 mr-2" /> Copy All
+                          </>
+                        )}
+                      </Button>
+                    </CardFooter>
+                  </Card>
                 </div>
-                {activeRepurposedContent &&
-                  activeRepurposedContent.type === "video" && (
-                    <div className="p-4 border rounded-md">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-medium">
-                          {activeRepurposedContent.title}
-                        </h3>
-                        <Badge className="bg-red-600 text-white">
-                          Video Content
-                        </Badge>
-                      </div>
-                      <p className="text-sm mb-4">
-                        {activeRepurposedContent.content}
-                      </p>
-                      {activeRepurposedContent.mediaUrl && (
-                        <div className="mt-2 aspect-video">
-                          <video
-                            controls
-                            className="w-full h-full rounded-md"
-                            src={activeRepurposedContent.mediaUrl}
-                          >
-                            Your browser does not support the video element.
-                          </video>
-                        </div>
-                      )}
-                    </div>
-                  )}
               </TabsContent>
             </Tabs>
           </CardHeader>

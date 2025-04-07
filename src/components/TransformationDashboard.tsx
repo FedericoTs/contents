@@ -47,6 +47,10 @@ interface TransformationDashboardProps {
   targetType?: "audio" | "video" | null;
   contentId?: string;
   contentText?: string;
+  isTransformedContent?: boolean;
+  transformedContentId?: string;
+  originalTargetFormat?: string;
+  sourceContentId?: string; // ID of the original content if this is a transformed content
 }
 
 interface TransformationConfig {
@@ -57,6 +61,9 @@ interface TransformationConfig {
   sampleOutput?: string;
   jobId?: string;
   contentId?: string;
+  sourceContentId?: string; // ID of the original content if this is a transformed content
+  isChainedTransformation?: boolean; // Flag to indicate if this is a transformation of already transformed content
+  previousTransformationId?: string; // ID of the previous transformation if this is a chained transformation
   settings: {
     tone?: string;
     length?: number;
@@ -118,6 +125,10 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
   targetType = null,
   contentId,
   contentText,
+  isTransformedContent = false,
+  transformedContentId,
+  originalTargetFormat,
+  sourceContentId,
 }) => {
   const [selectedTab, setSelectedTab] = useState("format");
   const [targetFormat, setTargetFormat] = useState("social-posts");
@@ -248,6 +259,10 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
       method: transformMethod,
       targetType: targetType,
       sampleOutput: sampleOutput.trim() !== "" ? sampleOutput : undefined,
+      isChainedTransformation: isTransformedContent,
+      previousTransformationId: transformedContentId,
+      sourceContentId:
+        sourceContentId || (isTransformedContent ? contentId : undefined),
       settings: {
         tone: contentTone,
         length: contentLength,
@@ -432,14 +447,31 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
         // Set the processed content
         setProcessedContent(result);
 
-        // Update the content item with the processed content
+        // Store the processed content in the content_outputs table instead of overwriting
         console.log(
-          "[TransformationDashboard] Updating content item with processed content",
+          "[TransformationDashboard] Storing processed content in content_outputs table",
         );
+        const { error: contentOutputError } = await supabase
+          .from("content_outputs")
+          .insert({
+            content_id: actualContentId,
+            output_type: selectedContentType || contentType,
+            target_format: targetFormat,
+            processed_content: result,
+            options: processingOptions,
+          });
+
+        if (contentOutputError) {
+          console.error(
+            "[TransformationDashboard] Error storing content output:",
+            contentOutputError,
+          );
+        }
+
+        // Update the content item status only
         const { error: updateContentError } = await supabase
           .from("content_items")
           .update({
-            processed_content: result,
             status: "processed",
             updated_at: new Date().toISOString(),
           })
@@ -447,7 +479,7 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
 
         if (updateContentError) {
           console.error(
-            "[TransformationDashboard] Error updating content item:",
+            "[TransformationDashboard] Error updating content item status:",
             updateContentError,
           );
         }
@@ -549,6 +581,11 @@ const TransformationDashboard: React.FC<TransformationDashboardProps> = ({
           Configure how you want to transform your content
           {selectedContentTitle && (
             <span className="font-medium"> {selectedContentTitle}</span>
+          )}
+          {isTransformedContent && (
+            <Badge variant="outline" className="ml-2">
+              Transforming from {originalTargetFormat?.replace(/-/g, " ")}
+            </Badge>
           )}
           {targetType && (
             <span className="ml-2 text-primary">

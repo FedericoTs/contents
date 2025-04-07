@@ -1,94 +1,171 @@
-import React, { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect, useState } from "react";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
-  Trash2,
-  Play,
-  Pause,
-  CheckCircle,
   AlertCircle,
+  CheckCircle,
   Clock,
-  Loader2,
+  Pause,
+  Play,
+  Trash2,
+  XCircle,
 } from "lucide-react";
-import {
-  getProcessingJobs,
-  processContentItem,
-} from "@/services/processingService";
+import { getProcessingJobs } from "@/services/processingService";
 import { supabase } from "@/services/supabase";
-import { useAuth } from "@/contexts/AuthContext";
 
-export interface QueueItem {
+export type ProcessingStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "paused";
+
+export interface ProcessingItem {
   id: string;
   title: string;
-  sourceType: "article" | "video" | "podcast";
+  sourceType: string;
   targetFormat: string;
-  targetType?: "audio" | "video" | null;
+  targetType?: string;
   progress: number;
-  status: "pending" | "processing" | "completed" | "failed";
+  status: ProcessingStatus;
+  error?: string;
+  content_id?: string;
+}
+
+export interface ProcessingResult {
+  id: string;
+  success: boolean;
+  output?: any;
   error?: string;
 }
 
-interface ProcessingQueueProps {
-  items?: QueueItem[];
+export interface ProcessingQueueProps {
+  items?: ProcessingItem[];
   onRemoveItem?: (id: string) => void;
   onStartProcessing?: (id: string) => void;
   onPauseProcessing?: (id: string) => void;
-  onItemProcessed?: (result: any) => void;
+  onItemProcessed?: (result: ProcessingResult) => void;
 }
 
+const getStatusIcon = (status: ProcessingStatus) => {
+  switch (status) {
+    case "pending":
+      return <Clock className="h-4 w-4 text-yellow-500" />;
+    case "processing":
+      return <Play className="h-4 w-4 text-blue-500" />;
+    case "completed":
+      return <CheckCircle className="h-4 w-4 text-green-500" />;
+    case "failed":
+      return <XCircle className="h-4 w-4 text-red-500" />;
+    case "paused":
+      return <Pause className="h-4 w-4 text-gray-500" />;
+    default:
+      return null;
+  }
+};
+
+const getStatusBadge = (status: ProcessingStatus) => {
+  switch (status) {
+    case "pending":
+      return (
+        <Badge
+          variant="outline"
+          className="bg-yellow-50 text-yellow-700 border-yellow-200"
+        >
+          {getStatusIcon(status)} Pending
+        </Badge>
+      );
+    case "processing":
+      return (
+        <Badge
+          variant="outline"
+          className="bg-blue-50 text-blue-700 border-blue-200"
+        >
+          {getStatusIcon(status)} Processing
+        </Badge>
+      );
+    case "completed":
+      return (
+        <Badge
+          variant="outline"
+          className="bg-green-50 text-green-700 border-green-200"
+        >
+          {getStatusIcon(status)} Completed
+        </Badge>
+      );
+    case "failed":
+      return (
+        <Badge
+          variant="outline"
+          className="bg-red-50 text-red-700 border-red-200"
+        >
+          {getStatusIcon(status)} Failed
+        </Badge>
+      );
+    case "paused":
+      return (
+        <Badge
+          variant="outline"
+          className="bg-gray-50 text-gray-700 border-gray-200"
+        >
+          {getStatusIcon(status)} Paused
+        </Badge>
+      );
+    default:
+      return null;
+  }
+};
+
 const ProcessingQueue = ({
-  items: initialItems,
-  onRemoveItem = () => {},
-  onStartProcessing = () => {},
-  onPauseProcessing = () => {},
-  onItemProcessed = () => {},
+  items: propItems,
+  onRemoveItem,
+  onStartProcessing,
+  onPauseProcessing,
+  onItemProcessed,
 }: ProcessingQueueProps) => {
-  const { user } = useAuth();
-  const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<ProcessingItem[]>(propItems || []);
+  const [loading, setLoading] = useState(!propItems);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch processing jobs from the database
+  // Import useAuth hook to get the current user
+  const { user, isLoading: authLoading } = useAuth();
+
   useEffect(() => {
-    if (initialItems) {
-      setQueueItems(initialItems);
-      setLoading(false);
+    // If items are provided as props, use those
+    if (propItems) {
+      setItems(propItems);
       return;
     }
 
+    // Don't fetch if auth is still loading
+    if (authLoading) {
+      return;
+    }
+
+    // Only fetch if we have a user
     if (!user) {
+      setError("You must be logged in to view processing jobs");
       setLoading(false);
       return;
     }
 
+    // Otherwise, fetch from the database
     const fetchJobs = async () => {
       try {
-        const jobs = await getProcessingJobs(user.id);
-        const formattedJobs = jobs.map((job) => ({
-          id: job.id,
-          title: job.content_items?.title || "Untitled Content",
-          sourceType: job.content_items?.content_type || "article",
-          targetFormat: job.target_format,
-          targetType: job.content_items?.target_type,
-          progress:
-            job.status === "completed"
-              ? 100
-              : job.status === "failed"
-                ? 0
-                : job.status === "processing"
-                  ? 50
-                  : 0,
-          status: job.status,
-          error: job.error,
-        }));
-        setQueueItems(formattedJobs);
+        setLoading(true);
+        setError(null);
+        console.log("Fetching processing jobs...");
+        const jobs = await getProcessingJobs();
+        console.log("Fetched jobs:", jobs);
+        setItems(jobs);
       } catch (err) {
         console.error("Error fetching processing jobs:", err);
-        setError("Failed to load processing queue");
+        setError(
+          err instanceof Error ? err.message : "Failed to load processing jobs",
+        );
       } finally {
         setLoading(false);
       }
@@ -98,7 +175,7 @@ const ProcessingQueue = ({
 
     // Set up real-time subscription for job updates
     const subscription = supabase
-      .channel("processing_jobs_changes")
+      .channel("processing-jobs-changes")
       .on(
         "postgres_changes",
         {
@@ -107,8 +184,37 @@ const ProcessingQueue = ({
           table: "processing_jobs",
         },
         (payload) => {
-          // Refresh the jobs list when there's a change
-          fetchJobs();
+          console.log("Real-time update received:", payload);
+          // Handle different types of changes
+          if (payload.eventType === "INSERT") {
+            setItems((current) => [...current, payload.new as ProcessingItem]);
+          } else if (payload.eventType === "UPDATE") {
+            setItems((current) =>
+              current.map((item) =>
+                item.id === payload.new.id
+                  ? (payload.new as ProcessingItem)
+                  : item,
+              ),
+            );
+
+            // If job completed or failed, trigger the onItemProcessed callback
+            if (
+              (payload.new.status === "completed" ||
+                payload.new.status === "failed") &&
+              onItemProcessed
+            ) {
+              onItemProcessed({
+                id: payload.new.id,
+                success: payload.new.status === "completed",
+                output: payload.new.output,
+                error: payload.new.error,
+              });
+            }
+          } else if (payload.eventType === "DELETE") {
+            setItems((current) =>
+              current.filter((item) => item.id !== payload.old.id),
+            );
+          }
         },
       )
       .subscribe();
@@ -116,237 +222,165 @@ const ProcessingQueue = ({
     return () => {
       subscription.unsubscribe();
     };
-  }, [user, initialItems]);
+  }, [propItems, onItemProcessed]);
 
-  const handleRemoveItem = async (id: string) => {
-    try {
-      const { error } = await supabase
-        .from("processing_jobs")
-        .delete()
-        .eq("id", id);
-
-      if (error) throw error;
-
-      setQueueItems(queueItems.filter((item) => item.id !== id));
+  const handleRemove = (id: string) => {
+    if (onRemoveItem) {
       onRemoveItem(id);
-    } catch (err) {
-      console.error("Error removing job:", err);
-      setError("Failed to remove job from queue");
+    } else {
+      // If no handler provided, just remove from local state
+      setItems((current) => current.filter((item) => item.id !== id));
     }
   };
 
-  const handleStartProcessing = async (id: string) => {
-    try {
-      // Find the job in the queue
-      const job = queueItems.find((item) => item.id === id);
-      if (!job) return;
-
-      // Update UI immediately to show processing
-      setQueueItems((items) =>
-        items.map((item) =>
-          item.id === id
-            ? { ...item, status: "processing", progress: 10 }
-            : item,
-        ),
-      );
-
-      // Get the content item ID and options from the database
-      const { data: jobData, error: jobError } = await supabase
-        .from("processing_jobs")
-        .select("content_id, options")
-        .eq("id", id)
-        .single();
-
-      if (jobError) throw jobError;
-      if (!jobData) throw new Error("Job not found");
-
-      // Start processing
+  const handleStartProcessing = (id: string) => {
+    if (onStartProcessing) {
       onStartProcessing(id);
-
-      // Process the content
-      const result = await processContentItem(
-        jobData.content_id,
-        jobData.options,
-      );
-
-      // Update UI to show completion
-      setQueueItems((items) =>
-        items.map((item) =>
-          item.id === id
-            ? { ...item, status: "completed", progress: 100 }
-            : item,
-        ),
-      );
-
-      // Notify parent component
-      onItemProcessed(result);
-    } catch (err) {
-      console.error("Error processing content:", err);
-      setError("Failed to process content");
-
-      // Update UI to show failure
-      setQueueItems((items) =>
-        items.map((item) =>
-          item.id === id
-            ? {
-                ...item,
-                status: "failed",
-                progress: 0,
-                error: err.message,
-              }
-            : item,
-        ),
-      );
     }
   };
 
   const handlePauseProcessing = (id: string) => {
-    // In this implementation, we can't actually pause OpenAI processing
-    // This would be implemented if using a different processing method
-    onPauseProcessing(id);
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "pending":
-        return <Clock className="h-4 w-4 text-muted-foreground" />;
-      case "processing":
-        return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
-      case "completed":
-        return <CheckCircle className="h-4 w-4 text-green-500" />;
-      case "failed":
-        return <AlertCircle className="h-4 w-4 text-red-500" />;
-      default:
-        return null;
+    if (onPauseProcessing) {
+      onPauseProcessing(id);
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "pending":
-        return <Badge variant="outline">Pending</Badge>;
-      case "processing":
-        return <Badge variant="secondary">Processing</Badge>;
-      case "completed":
-        return <Badge variant="default">Completed</Badge>;
-      case "failed":
-        return <Badge variant="destructive">Failed</Badge>;
-      default:
-        return null;
-    }
-  };
+  if (loading) {
+    return (
+      <Card className="w-full bg-white">
+        <CardHeader>
+          <CardTitle>Processing Queue</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex justify-center items-center p-6">
+            <div className="animate-pulse flex space-x-4">
+              <div className="rounded-full bg-slate-200 h-10 w-10"></div>
+              <div className="flex-1 space-y-6 py-1">
+                <div className="h-2 bg-slate-200 rounded"></div>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="h-2 bg-slate-200 rounded col-span-2"></div>
+                    <div className="h-2 bg-slate-200 rounded col-span-1"></div>
+                  </div>
+                  <div className="h-2 bg-slate-200 rounded"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card className="w-full bg-white">
+        <CardHeader>
+          <CardTitle>Processing Queue</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center p-4 mb-4 text-sm text-red-800 rounded-lg bg-red-50">
+            <AlertCircle className="h-4 w-4 mr-2" />
+            <span>Error: {error}</span>
+          </div>
+          <Button variant="outline" onClick={() => window.location.reload()}>
+            Retry
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <Card className="w-full bg-white">
+        <CardHeader>
+          <CardTitle>Processing Queue</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-center p-6 text-gray-500">
+            <p>No items in the processing queue</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
-    <Card className="w-full bg-background shadow-sm">
-      <CardHeader className="pb-3 pt-5 px-6">
-        <CardTitle className="text-lg font-semibold">
-          Processing Queue
-        </CardTitle>
+    <Card className="w-full bg-white">
+      <CardHeader>
+        <CardTitle>Processing Queue</CardTitle>
       </CardHeader>
-      <CardContent className="px-6 pb-5">
-        {error && (
-          <Alert variant="destructive" className="mb-4">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        <ScrollArea className="pr-4 h-full max-h-[400px]">
-          <div className="space-y-4">
-            {loading ? (
-              <div className="flex flex-col items-center justify-center h-[220px]">
-                <Loader2 className="h-8 w-8 text-primary animate-spin mb-2" />
-                <p className="text-muted-foreground">
-                  Loading processing queue...
-                </p>
-              </div>
-            ) : queueItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-[220px] text-muted-foreground">
-                <p>No items in queue</p>
-                <p className="text-sm mt-1">
-                  Add transformations to get started
-                </p>
-              </div>
-            ) : (
-              queueItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="border rounded-md p-4 bg-card shadow-sm"
-                >
-                  <div className="flex justify-between items-start mb-3">
-                    <div>
-                      <h3 className="font-medium text-sm truncate max-w-[200px]">
-                        {item.title}
-                      </h3>
-                      <div className="flex items-center gap-2 mt-1.5">
-                        <span className="text-xs text-muted-foreground">
-                          {item.sourceType} → {item.targetFormat}
-                          {item.targetType && (
-                            <span className="ml-1 text-primary">
-                              ({item.targetType === "audio" ? "Audio" : "Video"}
-                              )
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {getStatusBadge(item.status)}
-                    </div>
-                  </div>
-
-                  <div className="mt-3">
-                    <Progress value={item.progress} className="h-2.5" />
-                    <div className="flex justify-between items-center mt-3">
-                      <span className="text-xs text-muted-foreground">
-                        {item.status === "processing"
-                          ? "Processing..."
-                          : `${item.progress}% complete`}
-                      </span>
-                      <div className="flex gap-2">
-                        {item.status === "pending" && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 w-8 p-0"
-                            onClick={() => handleStartProcessing(item.id)}
-                          >
-                            <Play className="h-4 w-4" />
-                          </Button>
-                        )}
-                        {item.status === "processing" && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 w-8 p-0"
-                            onClick={() => handlePauseProcessing(item.id)}
-                            disabled
-                            title="Cannot pause OpenAI processing"
-                          >
-                            <Pause className="h-4 w-4" />
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                          onClick={() => handleRemoveItem(item.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                    {item.error && (
-                      <div className="mt-2 text-xs text-destructive">
-                        Error: {item.error}
-                      </div>
-                    )}
+      <CardContent>
+        <div className="space-y-4">
+          {items.map((item) => (
+            <div
+              key={item.id}
+              className="border rounded-lg p-4 bg-gray-50 hover:bg-gray-100 transition-colors"
+            >
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <h3 className="font-medium text-gray-900">{item.title}</h3>
+                  <div className="text-sm text-gray-500 mt-1">
+                    {item.sourceType} → {item.targetFormat}
+                    {item.targetType && ` (${item.targetType})`}
                   </div>
                 </div>
-              ))
-            )}
-          </div>
-        </ScrollArea>
+                <div className="flex space-x-2">
+                  {getStatusBadge(item.status)}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleRemove(item.id)}
+                    title="Remove from queue"
+                  >
+                    <Trash2 className="h-4 w-4 text-gray-500 hover:text-red-500" />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="flex justify-between text-xs text-gray-500 mb-1">
+                  <span>Progress</span>
+                  <span>{item.progress}%</span>
+                </div>
+                <Progress value={item.progress} className="h-2" />
+              </div>
+
+              {item.error && (
+                <div className="mt-3 text-sm text-red-600 bg-red-50 p-2 rounded">
+                  <AlertCircle className="h-4 w-4 inline mr-1" /> {item.error}
+                </div>
+              )}
+
+              {(item.status === "pending" || item.status === "paused") && (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => handleStartProcessing(item.id)}
+                  >
+                    <Play className="h-3 w-3 mr-1" /> Start Processing
+                  </Button>
+                </div>
+              )}
+
+              {item.status === "processing" && (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => handlePauseProcessing(item.id)}
+                  >
+                    <Pause className="h-3 w-3 mr-1" /> Pause
+                  </Button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );
